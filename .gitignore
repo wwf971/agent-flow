@@ -1,0 +1,12 @@
+.runtime/
+__pycache__/
+*.pyc
+config/config.0.yaml
+config/config-local-test.yaml
+
+node_modules/
+dist/
+build/
+/script/
+log*.*
+log/

@@ -1,0 +1,18 @@
+google_api_key: "example_google_api_key"
+google_model: "gemini-2.5-flash"
+url_extract_method: "trafilatura"
+auth:
+  users:
+    - username: example_rw
+      password: example_password
+      permission: RW
+    - username: example_r
+      password: example_read_password
+      permission: R
+config_databases:
+  local:
+    ip: 127.0.0.1
+    port: 5432
+    database_name: postgres
+    username: postgres
+    password: postgres

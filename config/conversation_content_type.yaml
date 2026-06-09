@@ -1,0 +1,10 @@
+contentTypeByCode:
+  1:
+    name: text
+    activeColumn: contentText
+  2:
+    name: json
+    activeColumn: contentJson
+  3:
+    name: textWithJson
+    activeColumn: contentTextAndContentJson
