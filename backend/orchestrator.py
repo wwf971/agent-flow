@@ -166,16 +166,33 @@ def _get_template_start_finish_metadata(template_key: str):
     }
 
 
+def _extract_tool_result_data(content_json: Any):
+    if not isinstance(content_json, dict):
+        return {}
+    metadata = content_json.get("metadata") if isinstance(content_json.get("metadata"), dict) else {}
+    data_list = content_json.get("data") if isinstance(content_json.get("data"), list) else []
+    if metadata.get("kind") == "toolResult" and data_list:
+        for segment_item in data_list:
+            segment = segment_item if isinstance(segment_item, dict) else {}
+            if segment.get("type") != "json":
+                continue
+            data = segment.get("data")
+            return data if isinstance(data, dict) else {}
+        return {}
+    return content_json
+
+
 def _get_turn_finish_metadata(event_generated_list: list[dict[str, Any]]):
     for event_item in event_generated_list:
         metadata = event_item.get("metadata") if isinstance(event_item.get("metadata"), dict) else {}
         content_json = event_item.get("contentJson") if isinstance(event_item.get("contentJson"), dict) else {}
-        if metadata.get("toolName") == "tool_terminate_conversation" or content_json.get("is_terminated") is True:
+        tool_result_data = _extract_tool_result_data(content_json)
+        if metadata.get("toolName") == "tool_terminate_conversation" or tool_result_data.get("is_terminated") is True:
             return {
                 "statusText": "completed",
                 "isUserTurn": False,
                 "endStatusText": "completed",
-                "endReasonText": str(content_json.get("reason") or ""),
+                "endReasonText": str(tool_result_data.get("reason") or ""),
             }
     return {"isUserTurn": True}
 
@@ -184,17 +201,8 @@ def _is_template_start_background(template_key: str):
     return template_key in {"mcp-tool-all", "mcp-interactive"}
 
 
-def _run_template_start_background(template_key: str, conversation_id: int, timezone: int):
+def _run_template_event_iter_background(event_iter, template_key: str, conversation_id: int, timezone: int):
     try:
-        event_iter = iter_template_events(
-            template_key,
-            {
-                "conversationId": str(conversation_id),
-                "messageText": "",
-                "eventList": [],
-                "logDir": None,
-            },
-        )
         for event_item in event_iter:
             run_in_transaction(
                 lambda db, event_item_current=event_item: _create_generated_event(
@@ -222,10 +230,32 @@ def _run_template_start_background(template_key: str, conversation_id: int, time
             pass
 
 
+def _run_template_start_background(template_key: str, conversation_id: int, timezone: int):
+    event_iter = iter_template_events(
+        template_key,
+        {
+            "conversationId": str(conversation_id),
+            "messageText": "",
+            "eventList": [],
+            "logDir": None,
+        },
+    )
+    _run_template_event_iter_background(event_iter, template_key, conversation_id, timezone)
+
+
 def _start_template_background_thread(template_key: str, conversation_id: int, timezone: int):
     thread = Thread(
         target=_run_template_start_background,
         args=(template_key, conversation_id, timezone),
+        daemon=True,
+    )
+    thread.start()
+
+
+def _start_template_event_iter_background_thread(event_iter, template_key: str, conversation_id: int, timezone: int):
+    thread = Thread(
+        target=_run_template_event_iter_background,
+        args=(event_iter, template_key, conversation_id, timezone),
         daemon=True,
     )
     thread.start()
@@ -319,7 +349,22 @@ def register_orchestrator_routes(app, make_json_response):
             conversation_id_for_error = conversation_id
             event_created_list = []
             if _is_template_start_background(template["key"]):
-                _start_template_background_thread(template["key"], conversation_id, timezone)
+                event_iter = iter_template_events(
+                    template["key"],
+                    {
+                        "conversationId": str(conversation_id),
+                        "messageText": "",
+                        "eventList": [],
+                        "logDir": None,
+                    },
+                )
+                event_first = next(event_iter, None)
+                if event_first is not None:
+                    event_created = run_in_transaction(
+                        lambda db: _create_generated_event(db, conversation_id, event_first, timezone)
+                    )
+                    event_created_list.append(event_created)
+                _start_template_event_iter_background_thread(event_iter, template["key"], conversation_id, timezone)
             return make_json_response(
                 0,
                 data={

@@ -1,6 +1,11 @@
+import { useState } from 'react'
 import { observer } from 'mobx-react-lite'
+import * as ReactCompMisc from '@wwf971/react-comp-misc'
 import { EventItem } from '../store/appStore'
+import ConversationSeg, { ConversationSegment } from '../conversation-segment/ConversationSeg'
 import RoleCard from './RoleCard'
+
+const SegmentedControl = (ReactCompMisc as any).SegmentedControl
 
 type MessageProps = {
   data: EventItem
@@ -9,19 +14,43 @@ type MessageProps = {
 const Message = observer(({ data }: MessageProps) => {
   const roleData = resolveRoleData(data.typeText)
   const displayData = resolveDisplayData(data)
+  const [viewMode, setViewMode] = useState(displayData.segmentList.length > 0 ? 'structured' : 'text')
+  const modeCurrent = displayData.segmentList.length > 0 ? viewMode : 'text'
   return (
     <div className="conversation-message-row">
       <RoleCard roleText={roleData.roleText} roleToneText={roleData.roleToneText} />
       <div className={`conversation-message-box conversation-message-box-${roleData.roleToneText}`}>
-        <div className="conversation-message-event-type">
-          {data.typeText}
-          {data.subtypeText ? ` / ${data.subtypeText}` : ''}
+        <div className="conversation-message-header">
+          {displayData.segmentList.length > 0 ? (
+            <div className="conversation-message-view-mode">
+              <SegmentedControl
+                data={modeCurrent}
+                options={[
+                  { value: 'structured', label: 'Structured' },
+                  { value: 'text', label: 'Text' },
+                ]}
+                onChange={(value: string) => setViewMode(value)}
+                widthMode="auto"
+              />
+            </div>
+          ) : null}
+          <div className="conversation-message-event-type-inline">
+            {data.typeText}
+            {data.subtypeText ? ` / ${data.subtypeText}` : ''}
+          </div>
         </div>
-        {displayData.text ? (
+        {modeCurrent === 'text' && displayData.text ? (
           <div className="conversation-message-text">{displayData.text}</div>
         ) : null}
-        {displayData.jsonText ? (
+        {modeCurrent === 'text' && displayData.jsonText ? (
           <pre className="conversation-message-json">{displayData.jsonText}</pre>
+        ) : null}
+        {modeCurrent === 'structured' ? (
+          <div className="conversation-segment-list">
+            {displayData.segmentList.map((segment, index) => (
+              <ConversationSeg key={index} segment={segment} />
+            ))}
+          </div>
         ) : null}
       </div>
     </div>
@@ -55,10 +84,12 @@ function resolveRoleData(typeText: string) {
 
 function resolveDisplayData(data: EventItem) {
   const textRaw = String(data.contentText || '')
-  if (data.typeText === 'orchestratorMessage' && data.subtypeText === 'toolResult') {
+  const segmentList = getStructuredSegmentList(data.contentJson)
+  if (segmentList.length > 0) {
     return {
       text: textRaw,
       jsonText: '',
+      segmentList,
     }
   }
   const jsonTextFromText = tryFormatJsonText(textRaw)
@@ -66,18 +97,33 @@ function resolveDisplayData(data: EventItem) {
     return {
       text: '',
       jsonText: jsonTextFromText,
+      segmentList: [],
     }
   }
   if (data.contentJson !== undefined && data.contentJson !== null) {
     return {
       text: textRaw,
       jsonText: JSON.stringify(data.contentJson, null, 2),
+      segmentList: [],
     }
   }
   return {
     text: textRaw,
     jsonText: '',
+    segmentList: [],
   }
+}
+
+function getStructuredSegmentList(contentJson: unknown): ConversationSegment[] {
+  if (!contentJson || typeof contentJson !== 'object') return []
+  const contentData = contentJson as { data?: unknown }
+  if (!Array.isArray(contentData.data)) return []
+  return contentData.data
+    .filter((item): item is ConversationSegment => (
+      !!item
+      && typeof item === 'object'
+      && typeof (item as ConversationSegment).type === 'string'
+    ))
 }
 
 function tryFormatJsonText(textRaw: string) {

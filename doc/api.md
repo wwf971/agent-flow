@@ -317,6 +317,45 @@ Context conversion:
 
 Tool and sub-agent events should not be added to model context until the later orchestrator logic explicitly supports them.
 
+For events with `contentType = 3`, `contentText` is the raw text form and `contentJson` is the structured form. Tool results should keep the exact agent-facing message in `contentText` and may use a segment envelope in `contentJson`:
+
+```json
+{
+  "typeText": "orchestratorMessage",
+  "subtypeText": "toolResult",
+  "contentType": 3,
+  "contentText": "Tool result: {\"status\":\"success\"}",
+  "contentJson": {
+    "metadata": {
+      "schemaVersion": 1,
+      "kind": "toolResult",
+      "toolName": "tool_web_fetch"
+    },
+    "data": [
+      {
+        "type": "text",
+        "data": "Tool result: "
+      },
+      {
+        "type": "json",
+        "data": {
+          "status": "success",
+          "text": "long extracted text"
+        },
+        "outputSchema": {},
+        "displayRules": {
+          "text": "popup"
+        }
+      },
+      {
+        "type": "text",
+        "data": "\nTools already completed: tool_web_fetch."
+      }
+    ]
+  }
+}
+```
+
 ## Config Endpoint
 
 | Method | Endpoint | Description |

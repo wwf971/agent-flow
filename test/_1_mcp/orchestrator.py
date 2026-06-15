@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from promp_tool import build_initial_prompt, build_interactive_prompt
 from tool_example import (
+  build_tool_result_structured_content,
   compose_continue_reply,
   compose_retry_reply,
   execute_tool_call,
@@ -137,7 +138,12 @@ def _run_tool_loop(messages, is_allow_repeated_tool, is_allow_termination, templ
       "subtypeText": "toolResult",
       "contentType": 3,
       "contentText": reply_orchestrator,
-      "contentJson": result,
+      "contentJson": build_tool_result_structured_content(
+        tool_name,
+        result,
+        reply_text=reply_orchestrator,
+        is_include_termination=is_allow_termination,
+      ),
       "metadata": {"templateKey": template_key, "toolName": tool_name},
     }
 

@@ -101,6 +101,45 @@ Initial usage:
 
 For pure text conversation, use `contentType = 1`.
 
+For tool results and later structured messages, `contentType = 3` should preserve the exact text sent to the agent in `contentText` and store displayable structured data in `contentJson`.
+
+Structured `contentJson` uses a versioned segment envelope:
+
+```json
+{
+  "metadata": {
+    "schemaVersion": 1,
+    "kind": "toolResult",
+    "toolName": "tool_web_fetch"
+  },
+  "data": [
+    {
+      "type": "text",
+      "data": "Tool result: "
+    },
+    {
+      "type": "json",
+      "data": { "status": "success" },
+      "outputSchema": {},
+      "displayRules": {}
+    },
+    {
+      "type": "text",
+      "data": "\nTools already completed: tool_web_fetch."
+    }
+  ]
+}
+```
+
+Initial segment types:
+
+| type | Notes |
+|------|-------|
+| `text` | plain text segment |
+| `json` | structured JSON segment |
+
+`displayRules` is an optional map of dot-paths to display behavior. The first supported behavior is `popup`, meaning the normal message card may show an abbreviated preview and provide a full-value popup.
+
 ## Service Rules
 
 - Conversation creation allocates a new conversation ID.

@@ -1,6 +1,6 @@
 import { makeAutoObservable, runInAction } from 'mobx'
 import { ApiRequestError, requestAuthenticatedJson } from '../apiRequest'
-import { resolveWebSocketUrl } from '../publicPath'
+import { isUpdateWebSocketEnabled, resolveWebSocketUrl } from '../publicPath'
 
 export const PAGE_KEY = {
   template: 'template',
@@ -32,6 +32,10 @@ export type EventItem = {
   contentJson?: any
   metadata: Record<string, any>
   createAt: string
+}
+
+type ConversationCreateFromTemplateResult = ConversationItem & {
+  eventGeneratedList?: EventItem[]
 }
 
 export type MessagePendingData = {
@@ -321,6 +325,10 @@ class AppStore {
   }
 
   connectUpdateSocket() {
+    if (!isUpdateWebSocketEnabled()) {
+      this.socketStatusText = 'disabled'
+      return
+    }
     if (this.socketUpdate) return
     const token = localStorage.getItem('react-agent-flow-auth-token') || ''
     const socketUrl = resolveWebSocketUrl(`/api/ws/conversation-updates?authToken=${encodeURIComponent(token)}`)
@@ -561,7 +569,7 @@ class AppStore {
       this.setOperationByKey(OPERATION_KEY.conversationCreate, createOperationState('running', 'Creating conversation'))
     })
     try {
-      const data = await requestAuthenticatedJson<ConversationItem>('/api/conversation/create/from-template', {
+      const data = await requestAuthenticatedJson<ConversationCreateFromTemplateResult>('/api/conversation/create/from-template', {
         method: 'POST',
         body: JSON.stringify({
           templateKey,
@@ -575,6 +583,10 @@ class AppStore {
         this.pageCurrentKey = PAGE_KEY.conversation
         this.noticeText = ''
         this.setOperationByKey(OPERATION_KEY.conversationCreate, createOperationState('success'))
+        const eventGeneratedList = data.eventGeneratedList || []
+        eventGeneratedList.forEach((event) => {
+          this.appendEventIfMissing(event)
+        })
         if (data.metadata?.statusText === 'starting') {
           this.setOperationByConversationId(data.conversationId, 'template-start', createOperationState('running', 'Starting conversation'))
         }

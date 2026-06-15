@@ -44,6 +44,8 @@ def _validate_content(content_type: int, content_text: Any, content_json: Any):
         raise RuntimeError("contentText is required")
     if content_type == 2 and content_json is None:
         raise RuntimeError("contentJson is required")
+    if content_type == 3 and not _to_text(content_text) and content_json is None:
+        raise RuntimeError("contentText or contentJson is required")
 
 
 def row_to_event(row):

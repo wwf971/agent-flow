@@ -23,3 +23,8 @@ export function resolveWebSocketUrl(pathValue: string) {
   if (value.startsWith('https://')) return `wss://${value.slice('https://'.length)}`
   return `${protocolText}//${window.location.host}${value}`
 }
+
+export function isUpdateWebSocketEnabled() {
+  const value = String(import.meta.env.VITE_ENABLE_UPDATE_WS ?? '1').trim().toLowerCase()
+  return !['0', 'false', 'no', 'off'].includes(value)
+}

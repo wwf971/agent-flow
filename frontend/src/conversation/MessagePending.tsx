@@ -13,9 +13,11 @@ const MessagePending = observer(({ data }: MessagePendingProps) => {
     <div className="conversation-message-row">
       <RoleCard roleText={data.roleText} roleToneText="pending" />
       <div className="conversation-message-box conversation-message-box-pending">
-        <div className="conversation-message-event-type">
-          {data.typeText}
-          {data.subtypeText ? ` / ${data.subtypeText}` : ''}
+        <div className="conversation-message-header">
+          <div className="conversation-message-event-type-inline">
+            {data.typeText}
+            {data.subtypeText ? ` / ${data.subtypeText}` : ''}
+          </div>
         </div>
         <div className="conversation-message-pending-body">
           <SpinningCircle width={14} height={14} />

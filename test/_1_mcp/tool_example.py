@@ -47,6 +47,23 @@ TOOLS_LIST = [
       "url": SITE_EXAMPLE,
       "char_num_max": 4000,
     },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "status": {"type": "string"},
+        "url": {"type": "string"},
+        "text": {"type": "string"},
+        "char_num": {"type": "integer"},
+        "char_num_max": {"type": "integer"},
+        "is_clipped": {"type": "boolean"},
+        "char_index_start": {"type": "integer"},
+        "char_index_end": {"type": "integer"},
+        "error": {"type": "string"},
+      },
+    },
+    "displayRules": {
+      "text": "popup",
+    },
   },
   {
     "name": "tool_calculator",
@@ -56,6 +73,14 @@ TOOLS_LIST = [
     },
     "example_args": {
       "expression": "25 * (8 + 2)",
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "status": {"type": "string"},
+        "expression": {"type": "string"},
+        "result": {"type": ["number", "integer"]},
+      },
     },
   },
   {
@@ -67,12 +92,27 @@ TOOLS_LIST = [
     "example_args": {
       "text": "hello",
     },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "status": {"type": "string"},
+        "text": {"type": "string"},
+        "md5": {"type": "string"},
+      },
+    },
   },
   {
     "name": "tool_unix_timestamp",
     "description": "Return the current Unix timestamp in seconds.",
     "args": {},
     "example_args": {},
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "status": {"type": "string"},
+        "unix_timestamp": {"type": "integer"},
+      },
+    },
   },
 ]
 TOOL_TERMINATE_CONVERSATION = {
@@ -83,6 +123,17 @@ TOOL_TERMINATE_CONVERSATION = {
   },
   "example_args": {
     "reason": "The user said bye.",
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "status": {"type": "string"},
+      "is_terminated": {"type": "boolean"},
+      "reason": {"type": "string"},
+    },
+  },
+  "displayRules": {
+    "reason": "popup",
   },
 }
 
@@ -126,6 +177,58 @@ def get_tool_call_examples(is_include_termination=False):
   if is_include_termination:
     tools.append(TOOL_TERMINATE_CONVERSATION)
   return "\n\n".join(build_tool_call_json(tool["name"], tool["example_args"]) for tool in tools)
+
+
+def get_tool_definition(tool_name, is_include_termination=False):
+  tools = list(TOOLS_LIST)
+  if is_include_termination:
+    tools.append(TOOL_TERMINATE_CONVERSATION)
+  for tool in tools:
+    if tool["name"] == tool_name:
+      return tool
+  return None
+
+
+def build_tool_result_structured_content(tool_name, result, reply_text=None, is_include_termination=False):
+  tool_definition = get_tool_definition(tool_name, is_include_termination=is_include_termination) or {}
+  result_text = json.dumps(result, ensure_ascii=False)
+  text_prefix = "Tool result: "
+  text_suffix = ""
+  if isinstance(reply_text, str) and result_text in reply_text:
+    prefix, suffix = reply_text.split(result_text, 1)
+    text_prefix = prefix
+    text_suffix = suffix
+  return {
+    "metadata": {
+      "schemaVersion": 1,
+      "kind": "toolResult",
+      "toolName": tool_name,
+    },
+    "data": [
+      {
+        "type": "text",
+        "data": text_prefix,
+      },
+      {
+        "type": "json",
+        "data": result,
+        "outputSchema": tool_definition.get("outputSchema") or {},
+        "displayRules": tool_definition.get("displayRules") or {},
+      },
+      {
+        "type": "text",
+        "data": text_suffix,
+      },
+    ],
+  }
+
+
+def build_tool_result_segment(tool_name, result, is_include_termination=False):
+  return build_tool_result_structured_content(
+    tool_name,
+    result,
+    is_include_termination=is_include_termination,
+  )
 
 
 def get_tools_called():

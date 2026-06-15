@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import { observer } from 'mobx-react-lite'
 import { reaction } from 'mobx'
-import { Login } from '@wwf971/react-comp-misc'
+import { Login, PanelDual } from '@wwf971/react-comp-misc'
 import ResourceTree from './ResourceTree'
 import ResourcePanel from './ResourcePanel'
 import { appStore } from './store/appStore'
@@ -51,14 +51,14 @@ const App = observer(() => {
 
   return (
     <div className="app-root">
-      <div className="app-layout">
+      <PanelDual orientation="vertical" initialWidth={300}>
         <div className="app-sidebar">
           <ResourceTree />
         </div>
         <div className="app-main">
           <ResourcePanel />
         </div>
-      </div>
+      </PanelDual>
     </div>
   )
 })

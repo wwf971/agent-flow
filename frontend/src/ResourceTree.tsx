@@ -20,16 +20,52 @@ const ResourceTree = observer(() => {
   })
   const [contextMenuState, setContextMenuState] = useState<ContextMenuState>(null)
   const conversationContext = contextMenuState ? appStore.conversationById[contextMenuState.conversationId] : null
-  const conversationContextStatusText = String(conversationContext?.metadata?.statusText || 'active')
   const isContextDeleteVisible = Boolean(
     conversationContext
-    && conversationContext.isInTrashbin !== true
-    && (conversationContextStatusText === 'active' || conversationContextStatusText === 'archived'),
+    && conversationContext.isInTrashbin !== true,
   )
   const isContextDeletePermanentVisible = Boolean(
     conversationContext
     && conversationContext.isInTrashbin === true,
   )
+
+  const openConversationContextMenu = (conversationId: string, event: MouseEvent) => {
+    const conversationIdNormalized = appStore.normalizeConversationId(conversationId)
+    if (!conversationIdNormalized) {
+      setContextMenuState(null)
+      return
+    }
+    void appStore.selectConversation(conversationIdNormalized)
+    setContextMenuState(null)
+    requestAnimationFrame(() => {
+      setContextMenuState({
+        conversationId: conversationIdNormalized,
+        position: {
+          x: event.clientX,
+          y: event.clientY,
+        },
+      })
+    })
+  }
+
+  const getConversationIdUnderContextMenu = (event: React.MouseEvent<HTMLDivElement>) => {
+    const overlayElementList = Array.from(document.querySelectorAll('.resource-context-menu-backdrop, .resource-context-menu')) as HTMLElement[]
+    const previousPointerEventList = overlayElementList.map((element) => ({
+      element,
+      pointerEvents: element.style.pointerEvents,
+    }))
+    overlayElementList.forEach((element) => {
+      element.style.pointerEvents = 'none'
+    })
+    const targetElement = document.elementFromPoint(event.clientX, event.clientY)
+    previousPointerEventList.forEach(({ element, pointerEvents }) => {
+      element.style.pointerEvents = pointerEvents
+    })
+    const rowElement = targetElement?.closest?.('[data-tree-item-id]')
+    const itemId = rowElement?.getAttribute('data-tree-item-id') || ''
+    const itemData = itemDataById[itemId]
+    return appStore.normalizeConversationId(itemData?.conversationId)
+  }
 
   const itemDataById: Record<string, any> = {
     templates: {
@@ -100,53 +136,63 @@ const ResourceTree = observer(() => {
   return (
     <>
       <TreeViewComp
-        rootItemIds={['templates', 'conversations', 'trashbin']}
-        getItemDataById={(itemId: string) => itemDataById[itemId] || null}
-        getItemComp={(itemData: any) => {
-          if (itemData?.isConversationItem) return ConversationTreeItem
-          return null
+        data={{
+          itemRootIds: ['templates', 'conversations', 'trashbin'],
+          itemDataById,
+          itemSelectedId: appStore.treeSelectedItemId,
         }}
-        selectedItemId={appStore.treeSelectedItemId}
-        onDataChangeRequest={async (type: string, params: any) => {
-          if (type !== 'toggle-expand') return { code: 0 }
-          const itemId = String(params?.itemId || '')
-          const isExpandedNext = params?.nextIsExpanded === true
-          setItemExpandedById((itemExpandedPrevious) => ({
-            ...itemExpandedPrevious,
-            [itemId]: isExpandedNext,
-          }))
-          return { code: 0 }
+        config={{
+          className: 'resource-tree-view',
+          getItemComp: (itemData: any) => {
+            if (itemData?.isConversationItem) return ConversationTreeItem
+            return null
+          },
+          getItemRowClassName: (itemData: any) => {
+            if (itemData?.isConversationItem) return 'resource-tree-conversation-row'
+            return ''
+          },
         }}
-        onItemClick={(itemId: string, itemData: any) => {
-          setContextMenuState(null)
-          if (itemId === 'templates') return
-          if (itemId === 'conversations') return
-          if (itemId === 'trashbin') return
-          if (itemId === 'conversation:new') {
-            appStore.selectNewConversation()
-            return
+        onEvent={async (eventType: string, eventData: any) => {
+          if (eventType === 'toggleExpand') {
+            const itemId = String(eventData?.itemId || '')
+            const isExpandedNext = eventData?.nextIsExpanded === true
+            setItemExpandedById((itemExpandedPrevious) => ({
+              ...itemExpandedPrevious,
+              [itemId]: isExpandedNext,
+            }))
+            return { code: 0 }
           }
-          if (itemData?.templateKey) {
-            appStore.selectTemplate(String(itemData.templateKey))
-            return
-          }
-          if (itemData?.conversationId) {
-            appStore.selectConversation(String(itemData.conversationId))
-          }
-        }}
-        onItemContextMenu={(_itemId: string, itemData: any, event: MouseEvent) => {
-          const conversationId = appStore.normalizeConversationId(itemData?.conversationId)
-          if (!conversationId) {
+          if (eventType === 'itemClick') {
+            const itemId = String(eventData?.itemId || '')
+            const itemData = eventData?.itemData
             setContextMenuState(null)
-            return
+            if (itemId === 'templates') return { code: 0 }
+            if (itemId === 'conversations') return { code: 0 }
+            if (itemId === 'trashbin') return { code: 0 }
+            if (itemId === 'conversation:new') {
+              appStore.selectNewConversation()
+              return { code: 0 }
+            }
+            if (itemData?.templateKey) {
+              appStore.selectTemplate(String(itemData.templateKey))
+              return { code: 0 }
+            }
+            if (itemData?.conversationId) {
+              appStore.selectConversation(String(itemData.conversationId))
+            }
+            return { code: 0 }
           }
-          setContextMenuState({
-            conversationId,
-            position: {
-              x: event.clientX,
-              y: event.clientY,
-            },
-          })
+          if (eventType === 'itemContextMenu') {
+            const itemData = eventData?.itemData
+            const event = eventData?.event as MouseEvent
+            const conversationId = appStore.normalizeConversationId(itemData?.conversationId)
+            if (!conversationId) {
+              setContextMenuState(null)
+              return { code: 0 }
+            }
+            openConversationContextMenu(conversationId, event)
+          }
+          return { code: 0 }
         }}
       />
       {contextMenuState ? (
@@ -156,6 +202,12 @@ const ResourceTree = observer(() => {
             onClick={() => setContextMenuState(null)}
             onContextMenu={(event) => {
               event.preventDefault()
+              event.stopPropagation()
+              const conversationId = getConversationIdUnderContextMenu(event)
+              if (conversationId) {
+                openConversationContextMenu(conversationId, event.nativeEvent)
+                return
+              }
               setContextMenuState(null)
             }}
           />
@@ -230,7 +282,6 @@ const ConversationTreeItem = observer(({ itemData }: { itemData: any }) => {
     element.focus()
     const range = document.createRange()
     range.selectNodeContents(element)
-    range.collapse(false)
     const selection = window.getSelection()
     selection?.removeAllRanges()
     selection?.addRange(range)

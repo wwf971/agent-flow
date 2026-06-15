@@ -91,6 +91,8 @@ The storage model should later support more event values without adding new tabl
 
 Those are not first-version requirements. The first version should only implement `textSimple`.
 
+For `orchestratorMessage/toolResult`, the backend should keep `contentText` as the exact text that was sent back into the model context. `contentJson` may store a structured segment envelope for frontend display. This lets the UI abbreviate long fields such as fetched web page text without changing the agent-facing message.
+
 ## Frontend Direction
 
 When UI is added, React state should be store-driven:
