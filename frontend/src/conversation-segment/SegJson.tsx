@@ -4,7 +4,7 @@ import AbbreviatedValue from './AbbreviatedValue'
 
 type DisplayRules = Record<string, string>
 
-type JsonSegmentViewProps = {
+type SegJsonProps = {
   data: unknown
   displayRules?: DisplayRules
 }
@@ -20,7 +20,7 @@ function normalizeJsonPath(pathText: string) {
     .replace(/^\./, '')
 }
 
-const JsonSegmentView = ({ data, displayRules = {} }: JsonSegmentViewProps) => {
+const SegJson = ({ data, displayRules = {} }: SegJsonProps) => {
   const jsonViewData = useMemo(() => createJsonViewData(data), [data])
   return (
     <div className="conversation-json-segment">
@@ -39,4 +39,4 @@ const JsonSegmentView = ({ data, displayRules = {} }: JsonSegmentViewProps) => {
   )
 }
 
-export default JsonSegmentView
+export default SegJson

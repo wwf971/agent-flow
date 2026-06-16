@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from contextlib import closing
 from datetime import datetime, timedelta, timezone as datetime_timezone
 from threading import Thread
@@ -9,12 +10,21 @@ from typing import Any
 from flask import request
 
 from conifg_template import get_template_by_key, iter_template_events, list_templates
-from config import get_google_model_config
+from config import get_dir_base, get_model_service_config
 from conversation import create_conversation_in_db, get_conversation_by_id, normalize_metadata
 from db import dict_cursor, run_in_transaction
 from event import create_event_in_db, list_events_by_conversation
 from login import has_request_permission
 
+DIR_BASE = get_dir_base()
+if str(DIR_BASE) not in sys.path:
+    sys.path.insert(0, str(DIR_BASE))
+
+from api_llm import generate_text
+
+def run_orchestrator(context: dict[str, Any]):
+    orchestrator = BackendOrchestrator().load(context)
+    yield from orchestrator.iter()
 
 def _to_text(value: Any):
     return str(value or "").strip()
@@ -59,21 +69,98 @@ def _build_prompt_from_events(event_list: list[dict[str, Any]], message_text: st
 
 
 def call_agent_text(event_list: list[dict[str, Any]], message_text: str):
-    model_config = get_google_model_config()
-    api_key = model_config["apiKey"]
-    model_name = model_config["model"]
-    if not api_key:
-        raise RuntimeError("google api key is not configured")
-    from google import genai
-    from google.genai import types
+    model_config = get_model_service_config()
+    return generate_text({
+        **model_config,
+        "textInput": _build_prompt_from_events(event_list, message_text),
+        "temperature": 0.0,
+    })
 
-    client = genai.Client(api_key=api_key)
-    response = client.models.generate_content(
-        model=model_name,
-        contents=_build_prompt_from_events(event_list, message_text),
-        config=types.GenerateContentConfig(temperature=0.0),
-    )
-    return response.text or ""
+
+class BackendOrchestrator:
+    def __init__(self):
+        self.metadata = {}
+        self.metadata_new = {}
+        self.event_list = []
+        self.event_index_last = -1
+        self.template_key = "free-talk"
+        self.iter_type = "userMessage"
+        self.message_text = ""
+        self.conversation_id = ""
+        self.log_dir = None
+
+    def load(self, context: dict[str, Any]):
+        self.template_key = _to_text(context.get("templateKey")) or "free-talk"
+        self.iter_type = _to_text(context.get("iterType")) or "userMessage"
+        self.message_text = _to_text(context.get("messageText"))
+        self.conversation_id = _to_text(context.get("conversationId"))
+        self.event_list = context.get("eventList") if isinstance(context.get("eventList"), list) else []
+        self.event_index_last = len(self.event_list) - 1
+        self.log_dir = context.get("logDir")
+        self.metadata = {
+            "templateKey": self.template_key,
+            "iterType": self.iter_type,
+        }
+        self.metadata_new = dict(self.metadata)
+        return self
+
+    def initialize(self, template_key: str, conversation_id: str = ""):
+        self.template_key = _to_text(template_key) or "free-talk"
+        self.conversation_id = _to_text(conversation_id)
+        self.iter_type = "templateStart"
+        self.event_list = []
+        self.event_index_last = -1
+        self.metadata = {"templateKey": self.template_key, "iterType": self.iter_type}
+        self.metadata_new = dict(self.metadata)
+        return self
+
+    def iter(self):
+        if self.is_template_start():
+            yield from self.iter_template_start()
+            return
+        if self.is_free_talk():
+            yield from self.iter_free_talk_turn()
+            return
+        yield from self.iter_template_turn()
+
+    def is_template_start(self):
+        return self.iter_type == "templateStart"
+
+    def is_free_talk(self):
+        return self.template_key == "free-talk"
+
+    def iter_template_start(self):
+        yield from iter_template_events(
+            self.template_key,
+            {
+                "conversationId": self.conversation_id,
+                "messageText": "",
+                "eventList": [],
+                "logDir": self.log_dir,
+            },
+        )
+
+    def iter_free_talk_turn(self):
+        reply_text = call_agent_text(self.event_list[:-1], self.message_text)
+        yield {
+            "typeText": "agentMessage",
+            "subtypeText": "textSimple",
+            "contentType": 1,
+            "contentText": reply_text,
+            "metadata": {"templateKey": "free-talk"},
+        }
+
+    def iter_template_turn(self):
+        yield from iter_template_events(
+            self.template_key,
+            {
+                "conversationId": self.conversation_id,
+                "messageText": self.message_text,
+                "eventList": self.event_list,
+                "logDir": self.log_dir,
+            },
+        )
+
 
 
 def _update_conversation_metadata(db, conversation_id: int, metadata_update: dict[str, Any], timezone: int):
@@ -106,11 +193,14 @@ def _get_template_key_from_conversation(db, conversation_id: int):
 def _get_conversation_turn_state(db, conversation_id: int):
     conversation = get_conversation_by_id(db, conversation_id)
     metadata = normalize_metadata(conversation.get("metadata"))
+    template_key = str(metadata.get("templateKey") or "free-talk")
+    template = get_template_by_key(template_key)
     return {
-        "templateKey": str(metadata.get("templateKey") or "free-talk"),
+        "templateKey": template_key,
         "statusText": str(metadata.get("statusText") or "active"),
         "isUserTurn": metadata.get("isUserTurn") is not False,
         "isInTrashbin": conversation.get("isInTrashbin") is True,
+        "isUserMessageAccepted": template.get("isUserMessageAccepted") is not False,
     }
 
 
@@ -154,16 +244,11 @@ def _create_generated_event(db, conversation_id: int, event_item: dict[str, Any]
 
 
 def _get_template_start_finish_metadata(template_key: str):
-    if template_key == "mcp-interactive":
-        return {
-            "statusText": "active",
-            "isUserTurn": True,
-        }
-    return {
-        "statusText": "completed",
-        "isUserTurn": False,
-        "endStatusText": "completed",
-    }
+    template = get_template_by_key(template_key)
+    metadata = template.get("metadataStartFinish")
+    if isinstance(metadata, dict):
+        return dict(metadata)
+    return {"statusText": "active", "isUserTurn": True}
 
 
 def _extract_tool_result_data(content_json: Any):
@@ -198,7 +283,7 @@ def _get_turn_finish_metadata(event_generated_list: list[dict[str, Any]]):
 
 
 def _is_template_start_background(template_key: str):
-    return template_key in {"mcp-tool-all", "mcp-interactive"}
+    return get_template_by_key(template_key).get("isStartBackground") is True
 
 
 def _run_template_event_iter_background(event_iter, template_key: str, conversation_id: int, timezone: int):
@@ -231,15 +316,12 @@ def _run_template_event_iter_background(event_iter, template_key: str, conversat
 
 
 def _run_template_start_background(template_key: str, conversation_id: int, timezone: int):
-    event_iter = iter_template_events(
-        template_key,
-        {
-            "conversationId": str(conversation_id),
-            "messageText": "",
-            "eventList": [],
-            "logDir": None,
-        },
-    )
+    event_iter = run_orchestrator({
+        "iterType": "templateStart",
+        "templateKey": template_key,
+        "conversationId": str(conversation_id),
+        "logDir": None,
+    })
     _run_template_event_iter_background(event_iter, template_key, conversation_id, timezone)
 
 
@@ -263,29 +345,14 @@ def _start_template_event_iter_background_thread(event_iter, template_key: str, 
 
 def _run_turn_background(template_key: str, conversation_id: int, message_text: str, event_list: list[dict[str, Any]], timezone: int):
     try:
-        if template_key == "free-talk":
-            reply_text = call_agent_text(event_list[:-1], message_text)
-            event_generated_list = [
-                {
-                    "typeText": "agentMessage",
-                    "subtypeText": "textSimple",
-                    "contentType": 1,
-                    "contentText": reply_text,
-                    "metadata": {"templateKey": "free-talk"},
-                }
-            ]
-        else:
-            event_generated_list = list(
-                iter_template_events(
-                    template_key,
-                    {
-                        "conversationId": str(conversation_id),
-                        "messageText": message_text,
-                        "eventList": event_list,
-                        "logDir": None,
-                    },
-                )
-            )
+        event_generated_list = list(run_orchestrator({
+            "iterType": "userMessage",
+            "templateKey": template_key,
+            "conversationId": str(conversation_id),
+            "messageText": message_text,
+            "eventList": event_list,
+            "logDir": None,
+        }))
 
         def create_agent_event_action(db):
             event_created_list = []
@@ -329,13 +396,14 @@ def register_orchestrator_routes(app, make_json_response):
         template_key = _to_text(body.get("templateKey")) or "free-talk"
         template = get_template_by_key(template_key)
         metadata_raw = body.get("metadata") if isinstance(body.get("metadata"), dict) else {}
+        metadata_create = template.get("metadataCreate") if isinstance(template.get("metadataCreate"), dict) else {}
         metadata = {
             **metadata_raw,
             "title": metadata_raw.get("title") or _build_default_conversation_title(template["name"], timezone),
-            "statusText": metadata_raw.get("statusText") or ("starting" if _is_template_start_background(template["key"]) else "active"),
+            "statusText": metadata_raw.get("statusText") or metadata_create.get("statusText") or "active",
             "templateKey": template["key"],
             "templateName": template["name"],
-            "isUserTurn": not _is_template_start_background(template["key"]),
+            "isUserTurn": metadata_raw.get("isUserTurn") if "isUserTurn" in metadata_raw else metadata_create.get("isUserTurn", True),
         }
 
         def action(db):
@@ -349,15 +417,12 @@ def register_orchestrator_routes(app, make_json_response):
             conversation_id_for_error = conversation_id
             event_created_list = []
             if _is_template_start_background(template["key"]):
-                event_iter = iter_template_events(
-                    template["key"],
-                    {
-                        "conversationId": str(conversation_id),
-                        "messageText": "",
-                        "eventList": [],
-                        "logDir": None,
-                    },
-                )
+                event_iter = run_orchestrator({
+                    "iterType": "templateStart",
+                    "templateKey": template["key"],
+                    "conversationId": str(conversation_id),
+                    "logDir": None,
+                })
                 event_first = next(event_iter, None)
                 if event_first is not None:
                     event_created = run_in_transaction(
@@ -409,11 +474,8 @@ def register_orchestrator_routes(app, make_json_response):
                 turn_state = run_in_transaction(lambda db: _get_conversation_turn_state(db, conversation_id_for_error))
             except Exception as error:
                 return make_json_response(-10, message=str(error)), 400
-            if turn_state["templateKey"] == "mcp-tool-all":
-                return make_json_response(
-                    -10,
-                    message="MCP Tool Exercise is a one-shot template and does not accept user messages after startup",
-                ), 400
+            if not turn_state["isUserMessageAccepted"]:
+                return make_json_response(-10, message="conversation does not accept user messages"), 400
             if turn_state["isInTrashbin"]:
                 return make_json_response(-10, message="conversation is in trashbin"), 400
             if turn_state["statusText"] != "active" or not turn_state["isUserTurn"]:
@@ -430,10 +492,11 @@ def register_orchestrator_routes(app, make_json_response):
                         metadata_conversation = {}
                     template_key_new = str(metadata_conversation.get("templateKey") or "free-talk")
                     template = get_template_by_key(template_key_new)
+                    metadata_create = template.get("metadataCreate") if isinstance(template.get("metadataCreate"), dict) else {}
                     metadata_conversation["templateKey"] = template["key"]
                     metadata_conversation["templateName"] = template["name"]
                     metadata_conversation["title"] = metadata_conversation.get("title") or _build_default_conversation_title(template["name"], timezone)
-                    metadata_conversation["statusText"] = metadata_conversation.get("statusText") or "active"
+                    metadata_conversation["statusText"] = metadata_conversation.get("statusText") or metadata_create.get("statusText") or "active"
                     metadata_conversation["isUserTurn"] = False
                     conversation = create_conversation_in_db(db, metadata_conversation, timezone)
                     conversation_id = int(conversation["conversationId"])

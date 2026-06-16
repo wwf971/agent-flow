@@ -6,49 +6,23 @@ from pathlib import Path
 from typing import Any
 
 from config import get_dir_base
+from templates import TEMPLATE_LIST
 
 DIR_BASE = get_dir_base()
 
-TEMPLATE_FREE_TALK = {
-    "key": "free-talk",
-    "name": "Free Talk",
-    "description": "A plain text conversation with the model.",
-    "modulePath": "",
-}
-
-TEMPLATE_HARDCODED_LIST = [
-    TEMPLATE_FREE_TALK,
-    {
-        "key": "web-fetch-local",
-        "name": "Web Fetch Local",
-        "description": "Fetches live web page text and asks the model to answer from the fetched text.",
-        "modulePath": "test/_0_web_fetch_local/orchestrator.py",
-    },
-    {
-        "key": "mcp-tool-all",
-        "name": "MCP Tool Exercise",
-        "description": "Asks the agent to try every available tool and lets the orchestrator handle tool results.",
-        "modulePath": "test/_1_mcp/orchestrator.py",
-    },
-    {
-        "key": "mcp-interactive",
-        "name": "MCP Tool Exercise(Interactive)",
-        "description": "Runs the MCP tool exercise first, then lets the user continue talking with tool support.",
-        "modulePath": "test/_1_mcp/orchestrator.py",
-    },
-]
+TEMPLATE_FALLBACK = dict(TEMPLATE_LIST[0])
 
 
 def list_templates():
-    return [dict(item) for item in TEMPLATE_HARDCODED_LIST]
+    return [dict(item) for item in TEMPLATE_LIST]
 
 
 def get_template_by_key(template_key: str):
     normalized_key = str(template_key or "free-talk").strip() or "free-talk"
-    for item in TEMPLATE_HARDCODED_LIST:
+    for item in TEMPLATE_LIST:
         if item["key"] == normalized_key:
             return dict(item)
-    return dict(TEMPLATE_FREE_TALK)
+    return dict(TEMPLATE_FALLBACK)
 
 
 def load_template_module(template_key: str):

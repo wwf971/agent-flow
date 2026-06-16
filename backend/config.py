@@ -64,9 +64,18 @@ def load_content_type_config():
     return data
 
 
-def get_google_model_config():
+def get_model_service_config():
     project_config = get_project_config()
     return {
+        "providerName": str(project_config.get("llm_provider") or "google"),
         "apiKey": str(project_config.get("google_api_key") or os.environ.get("GOOGLE_API_KEY") or ""),
-        "model": str(project_config.get("google_model") or "gemini-2.5-flash"),
+        "modelName": str(project_config.get("google_model") or "gemini-2.5-flash"),
+    }
+
+
+def get_google_model_config():
+    config_data = get_model_service_config()
+    return {
+        "apiKey": config_data["apiKey"],
+        "model": config_data["modelName"],
     }

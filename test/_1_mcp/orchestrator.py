@@ -1,7 +1,10 @@
 from __future__ import annotations
 
-from promp_tool import build_initial_prompt, build_interactive_prompt
-from tool_example import (
+from api_llm import ask_agent
+from backend.config import get_model_service_config
+from common import (
+  build_initial_prompt,
+  build_interactive_prompt,
   build_tool_result_structured_content,
   compose_continue_reply,
   compose_retry_reply,
@@ -10,7 +13,6 @@ from tool_example import (
   parse_tool_call,
   reset_tool_status,
 )
-from test_utils import ask_agent, build_client_and_model
 
 TEMPLATE_LIST = [
   {
@@ -90,50 +92,103 @@ def _build_startup_prompt(template_key, mode_config):
   return build_interactive_prompt()
 
 
-def _run_tool_loop(messages, is_allow_repeated_tool, is_allow_termination, template_key, is_exercise_mode=False):
-  client, model_name = build_client_and_model()
-  for _index in range(8):
-    reply_agent = ask_agent(client, model_name, messages)
-    messages.append({"role": "assistant", "text": reply_agent})
-    tool_call, parse_error = parse_tool_call(
-      reply_agent,
-      is_allow_repeated_tool=is_allow_repeated_tool,
-      is_allow_termination=is_allow_termination,
-    )
-    if tool_call is None:
-      if is_exercise_mode:
-        reply_orchestrator = compose_retry_reply(parse_error)
-        messages.append({"role": "user", "text": reply_orchestrator})
-        yield _yield_text("agentMessage", reply_agent, {"templateKey": template_key, "isToolCallRejected": True})
-        yield _yield_text("orchestratorMessage", reply_orchestrator, {"templateKey": template_key})
-        continue
-      yield _yield_text("agentMessage", reply_agent, {"templateKey": template_key})
-      return
+class McpToolOrchestrator:
+  def __init__(self, template_key="mcp-interactive"):
+    self.metadata = {"templateKey": template_key}
+    self.event_list = []
+    self.event_index_last = -1
+    self.messages = []
+    self.mode_config = TEMPLATE_MODE_BY_KEY.get(template_key) or TEMPLATE_MODE_BY_KEY["mcp-interactive"]
 
+  def load(self, context):
+    self.metadata["templateKey"] = str(context.get("templateKey") or self.metadata["templateKey"])
+    self.event_list = context.get("eventList") or []
+    self.event_index_last = len(self.event_list) - 1
+    self.messages = _message_list_from_events(self.event_list)
+    self.mode_config = TEMPLATE_MODE_BY_KEY.get(self.metadata["templateKey"]) or TEMPLATE_MODE_BY_KEY["mcp-interactive"]
+    return self
+
+  def initialize(self):
+    reset_tool_status()
+    prompt_initial = _build_startup_prompt(self.metadata["templateKey"], self.mode_config)
+    self.messages.append({"role": "user", "text": prompt_initial})
+    return _yield_text(
+      "orchestratorMessage",
+      prompt_initial,
+      {"templateKey": self.metadata["templateKey"], "isInitialPrompt": True},
+    )
+
+  def iter(self):
+    if not _has_initial_prompt(self.event_list):
+      yield self.initialize()
+      yield from self.iter_tool_loop()
+      return
+    if self.metadata["templateKey"] == "mcp-interactive":
+      self.prepare_interactive_prompt()
+      yield from self.iter_tool_loop()
+
+  def prepare_interactive_prompt(self):
+    if _has_interactive_system_prompt(self.event_list):
+      return
+    prompt_interactive = build_interactive_prompt()
+    self.messages.insert(0, {"role": "user", "text": prompt_interactive})
+
+  def iter_tool_loop(self):
+    model_request_config = get_model_service_config()
+    for _index in range(8):
+      reply_agent = ask_agent(model_request_config, self.messages)
+      self.messages.append({"role": "assistant", "text": reply_agent})
+      tool_call, parse_error = parse_tool_call(
+        reply_agent,
+        is_allow_repeated_tool=self.mode_config["isAllowRepeatedTool"],
+        is_allow_termination=self.mode_config["isAllowTermination"],
+      )
+      if tool_call is None:
+        yield from self.iter_after_text_reply(reply_agent, parse_error)
+        continue
+      yield from self.iter_after_tool_call(reply_agent, tool_call, model_request_config)
+      if self.is_tool_loop_done(tool_call):
+        return
+
+  def iter_after_text_reply(self, reply_agent, parse_error):
+    if not self.mode_config["isExerciseMode"]:
+      yield _yield_text("agentMessage", reply_agent, {"templateKey": self.metadata["templateKey"]})
+      return
+    reply_orchestrator = compose_retry_reply(parse_error)
+    self.messages.append({"role": "user", "text": reply_orchestrator})
+    yield _yield_text("agentMessage", reply_agent, {"templateKey": self.metadata["templateKey"], "isToolCallRejected": True})
+    yield _yield_text("orchestratorMessage", reply_orchestrator, {"templateKey": self.metadata["templateKey"]})
+
+  def iter_after_tool_call(self, reply_agent, tool_call, model_request_config):
     tool_name = tool_call["tool_name"]
     args = tool_call["args"]
-    yield {
+    yield self.build_tool_call_event(reply_agent, tool_call, tool_name)
+    try:
+      result = execute_tool_call(tool_name, args)
+    except Exception as error:
+      reply_orchestrator = f"Tool execution failed: {error}. Please try again or answer naturally."
+      self.messages.append({"role": "user", "text": reply_orchestrator})
+      yield _yield_text("orchestratorMessage", reply_orchestrator, {"templateKey": self.metadata["templateKey"]})
+      return
+    yield self.build_tool_result_event(tool_name, result)
+    if self.mode_config["isExerciseMode"] and not get_tools_remaining():
+      reply_final = ask_agent(model_request_config, self.messages)
+      yield _yield_text("agentMessage", reply_final, {"templateKey": self.metadata["templateKey"], "isFinal": True})
+
+  def build_tool_call_event(self, reply_agent, tool_call, tool_name):
+    return {
       "typeText": "agentMessage",
       "subtypeText": "toolCall",
       "contentType": 3,
       "contentText": reply_agent,
       "contentJson": tool_call,
-      "metadata": {"templateKey": template_key, "toolName": tool_name},
+      "metadata": {"templateKey": self.metadata["templateKey"], "toolName": tool_name},
     }
-    try:
-      result = execute_tool_call(tool_name, args)
-    except Exception as error:
-      reply_orchestrator = f"Tool execution failed: {error}. Please try again or answer naturally."
-      messages.append({"role": "user", "text": reply_orchestrator})
-      yield _yield_text("orchestratorMessage", reply_orchestrator, {"templateKey": template_key})
-      continue
 
-    if is_exercise_mode:
-      reply_orchestrator = compose_continue_reply(tool_name, result)
-    else:
-      reply_orchestrator = f"Tool result: {result}"
-    messages.append({"role": "user", "text": reply_orchestrator})
-    yield {
+  def build_tool_result_event(self, tool_name, result):
+    reply_orchestrator = compose_continue_reply(tool_name, result) if self.mode_config["isExerciseMode"] else f"Tool result: {result}"
+    self.messages.append({"role": "user", "text": reply_orchestrator})
+    return {
       "typeText": "orchestratorMessage",
       "subtypeText": "toolResult",
       "contentType": 3,
@@ -142,39 +197,17 @@ def _run_tool_loop(messages, is_allow_repeated_tool, is_allow_termination, templ
         tool_name,
         result,
         reply_text=reply_orchestrator,
-        is_include_termination=is_allow_termination,
+        is_include_termination=self.mode_config["isAllowTermination"],
       ),
-      "metadata": {"templateKey": template_key, "toolName": tool_name},
+      "metadata": {"templateKey": self.metadata["templateKey"], "toolName": tool_name},
     }
 
-    if tool_name == "tool_terminate_conversation":
-      return
-    if is_exercise_mode and not get_tools_remaining():
-      reply_final = ask_agent(client, model_name, messages)
-      yield _yield_text("agentMessage", reply_final, {"templateKey": template_key, "isFinal": True})
-      return
+  def is_tool_loop_done(self, tool_call):
+    if tool_call["tool_name"] == "tool_terminate_conversation":
+      return True
+    return self.mode_config["isExerciseMode"] and not get_tools_remaining()
 
 
 def orchestrator_iter(context):
-  template_key = str(context.get("templateKey") or "mcp-interactive")
-  event_list = context.get("eventList") or []
-  messages = _message_list_from_events(event_list)
-  mode_config = TEMPLATE_MODE_BY_KEY.get(template_key) or TEMPLATE_MODE_BY_KEY["mcp-interactive"]
-  if not _has_initial_prompt(event_list):
-    reset_tool_status()
-    prompt_initial = _build_startup_prompt(template_key, mode_config)
-    messages.append({"role": "user", "text": prompt_initial})
-    yield _yield_text("orchestratorMessage", prompt_initial, {"templateKey": template_key, "isInitialPrompt": True})
-    yield from _run_tool_loop(
-      messages,
-      mode_config["isAllowRepeatedTool"],
-      mode_config["isAllowTermination"],
-      template_key,
-      mode_config["isExerciseMode"],
-    )
-    return
-  if template_key == "mcp-interactive":
-    if not _has_interactive_system_prompt(event_list):
-      prompt_interactive = build_interactive_prompt()
-      messages.insert(0, {"role": "user", "text": prompt_interactive})
-    yield from _run_tool_loop(messages, True, True, "mcp-interactive")
+  orchestrator = McpToolOrchestrator().load(context)
+  yield from orchestrator.iter()

@@ -1,5 +1,8 @@
-from promp_tool import build_initial_prompt
-from tool_example import (
+import sys
+from pathlib import Path
+
+from common import (
+  build_initial_prompt,
   compose_continue_reply,
   compose_retry_reply,
   execute_tool_call,
@@ -8,11 +11,16 @@ from tool_example import (
   parse_tool_call,
   reset_tool_status,
 )
+from api_llm import ask_agent
+from backend.config import get_model_service_config
+
+THIS_DIR = Path(__file__).resolve().parent
+TEST_DIR = THIS_DIR.parent
+if str(TEST_DIR) not in sys.path:
+  sys.path.insert(0, str(TEST_DIR))
+
 from test_utils import (
-  THIS_DIR,
   append_message,
-  ask_agent,
-  build_client_and_model,
   build_time_stamp,
   format_tool_result_for_print,
   print_section,
@@ -26,14 +34,14 @@ MAX_ATTEMPTS = 10
 
 def run_tool_experiment():
   reset_tool_status()
-  client, model_name = build_client_and_model()
+  model_request_config = get_model_service_config()
   messages = []
   append_message(messages, "user", build_initial_prompt(is_encourage_invalid_tool=True), event_type="orchestratorMessage")
   print_section("Initial Prompt", messages[-1]["text"])
 
   final_status = "stopped"
   for attempt_index in range(1, MAX_ATTEMPTS + 1):
-    reply_agent = ask_agent(client, model_name, messages)
+    reply_agent = ask_agent(model_request_config, messages)
     append_message(messages, "assistant", reply_agent)
     print_section(f"Agent Reply {attempt_index}", reply_agent)
 
@@ -61,7 +69,7 @@ def run_tool_experiment():
 
     if not get_tools_remaining():
       final_status = "all_tools_completed"
-      reply_final = ask_agent(client, model_name, messages)
+      reply_final = ask_agent(model_request_config, messages)
       append_message(messages, "assistant", reply_final)
       print_section("Final Agent Summary", reply_final)
       break
@@ -73,7 +81,7 @@ def run_tool_experiment():
   log_path = THIS_DIR / f"{build_time_stamp()}_conversation.txt"
   write_conversation_log(log_path, messages, final_status)
   print_section("Saved Conversation Log", str(log_path))
-  try_write_backend_conversation_log(messages, final_status, "_1_mcp tool experiment")
+  try_write_backend_conversation_log(messages, final_status, "_1_mcp tool experiment", "_1_mcp")
   print_section("Tools Completed", ", ".join(get_tools_called()) or "none")
 
 

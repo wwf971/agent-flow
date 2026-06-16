@@ -1,12 +1,18 @@
 import json
+import sys
+from pathlib import Path
 
-from promp_tool import build_interactive_prompt
-from tool_example import execute_tool_call, parse_tool_call
+from common import build_interactive_prompt, execute_tool_call, parse_tool_call
+from api_llm import ask_agent
+from backend.config import get_model_service_config
+
+THIS_DIR = Path(__file__).resolve().parent
+TEST_DIR = THIS_DIR.parent
+if str(TEST_DIR) not in sys.path:
+  sys.path.insert(0, str(TEST_DIR))
+
 from test_utils import (
-  THIS_DIR,
   append_message,
-  ask_agent,
-  build_client_and_model,
   build_time_stamp,
   format_tool_result_for_print,
   print_section,
@@ -33,17 +39,17 @@ def save_interactive_log(messages, final_status):
   log_path = THIS_DIR / f"{build_time_stamp()}_conversation_interactive.md"
   write_conversation_log(log_path, messages, final_status)
   print_section("Saved Conversation Log", str(log_path))
-  try_write_backend_conversation_log(messages, final_status, "_1_mcp interactive conversation")
+  try_write_backend_conversation_log(messages, final_status, "_1_mcp interactive conversation", "_1_mcp")
 
 
 def run_interactive_conversation():
-  client, model_name = build_client_and_model()
+  model_request_config = get_model_service_config()
   messages = []
   append_message(messages, "user", build_interactive_prompt(), event_type="orchestratorMessage")
   print_section("Interactive Prompt", messages[-1]["text"])
 
   while True:
-    reply_agent = ask_agent(client, model_name, messages)
+    reply_agent = ask_agent(model_request_config, messages)
     append_message(messages, "assistant", reply_agent)
     print_section("Agent", reply_agent)
 

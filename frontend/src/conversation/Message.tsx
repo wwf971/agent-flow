@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { observer } from 'mobx-react-lite'
 import * as ReactCompMisc from '@wwf971/react-comp-misc'
 import { EventItem } from '../store/appStore'
-import ConversationSeg, { ConversationSegment } from '../conversation-segment/ConversationSeg'
+import SegMessage, { SegMessageData } from '../conversation-segment/SegMessage'
 import RoleCard from './RoleCard'
 
 const SegmentedControl = (ReactCompMisc as any).SegmentedControl
@@ -48,7 +48,7 @@ const Message = observer(({ data }: MessageProps) => {
         {modeCurrent === 'structured' ? (
           <div className="conversation-segment-list">
             {displayData.segmentList.map((segment, index) => (
-              <ConversationSeg key={index} segment={segment} />
+              <SegMessage key={index} segment={segment} />
             ))}
           </div>
         ) : null}
@@ -114,15 +114,15 @@ function resolveDisplayData(data: EventItem) {
   }
 }
 
-function getStructuredSegmentList(contentJson: unknown): ConversationSegment[] {
+function getStructuredSegmentList(contentJson: unknown): SegMessageData[] {
   if (!contentJson || typeof contentJson !== 'object') return []
   const contentData = contentJson as { data?: unknown }
   if (!Array.isArray(contentData.data)) return []
   return contentData.data
-    .filter((item): item is ConversationSegment => (
+    .filter((item): item is SegMessageData => (
       !!item
       && typeof item === 'object'
-      && typeof (item as ConversationSegment).type === 'string'
+      && typeof (item as SegMessageData).type === 'string'
     ))
 }
 

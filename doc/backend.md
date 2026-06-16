@@ -26,7 +26,7 @@ frontend or script
   -> PostgreSQL
 ```
 
-For the first version, model/tool adapters can reuse the current experiment code from `test_genai.py`, `test/_0_web_fetch_local/test.py`, and `test/_1_mcp/test.py` only where it helps. The persisted event model should be the new stable boundary.
+For the first version, model/tool adapters can reuse current experiment code from `test/_0_web_fetch_local/test.py` and `test/_1_mcp/test.py` only where it helps. External model calls should go through `api_llm`, and the persisted event model should be the stable boundary.
 
 ## Backend Modules
 
