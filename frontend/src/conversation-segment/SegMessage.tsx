@@ -1,4 +1,5 @@
 import SegJson from './SegJson'
+import '../conversation/Message.css'
 
 export type SegMessageData = {
   type: string

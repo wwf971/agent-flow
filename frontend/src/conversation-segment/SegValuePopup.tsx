@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 import { JsonCompMobx } from '@wwf971/react-comp-misc'
+import './SegValuePopup.css'
 
 type SegValuePopupProps = {
   titleText: string

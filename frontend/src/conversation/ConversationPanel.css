@@ -1,0 +1,126 @@
+.conversation-root {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  height: calc(100vh - 16px);
+}
+
+.conversation-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #fff;
+  border: 1px solid #d9e1ef;
+  border-radius: 4px;
+  padding: 6px;
+}
+
+.conversation-title {
+  font-size: 18px;
+  font-weight: 600;
+  min-height: 24px;
+  line-height: 1.3;
+  padding: 2px 4px;
+  box-sizing: border-box;
+}
+
+.conversation-title-view-root {
+  flex: 0 1 45%;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 45%;
+}
+
+.conversation-title-view-root .conversation-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-title-edit-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid #c8d5ea;
+  border-radius: 4px;
+  background: #fff;
+  color: #52627c;
+  cursor: pointer;
+  padding: 0;
+}
+
+.conversation-title-edit-btn:hover {
+  background: #f8fbff;
+}
+
+.conversation-title-edit-root {
+  flex: 0 1 45%;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 45%;
+}
+
+.conversation-title-edit {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid #b9c7dd;
+  border-radius: 4px;
+  background: #f8fbff;
+  outline: none;
+}
+
+.conversation-meta {
+  display: flex;
+  gap: 4px;
+}
+
+.conversation-tag {
+  border: 1px solid #c8d5ea;
+  border-radius: 4px;
+  padding: 2px 5px;
+  font-size: 12px;
+  color: #41516d;
+  background: #f8fbff;
+}
+
+.conversation-header-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.main-btn,
+.button-with-dropdown-button {
+  border: 1px solid #b9c7dd;
+  border-radius: 4px;
+  background: #fff;
+  color: #273a5c;
+  padding: 4px 8px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.main-btn:disabled,
+.button-with-dropdown-button:disabled {
+  color: #9aa6ba;
+  background: #f1f4f9;
+  cursor: default;
+}
+
+.conversation-delete-dropdown {
+  display: flex;
+}
+
+.conversation-message-list {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 2px 0;
+}

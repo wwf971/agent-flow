@@ -1,0 +1,41 @@
+.panel-root {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.panel-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: #22304a;
+}
+
+.panel-empty-text {
+  padding: 8px;
+  color: #6a7892;
+  font-size: 13px;
+}
+
+.card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.message-error {
+  border: 1px solid #e2b5b5;
+  border-radius: 4px;
+  background: #fff7f7;
+  color: #8a2f2f;
+  padding: 5px 6px;
+  font-size: 13px;
+}
+
+.message-info {
+  border: 1px solid #b8cce8;
+  border-radius: 4px;
+  background: #f6faff;
+  color: #2f4f7a;
+  padding: 5px 6px;
+  font-size: 13px;
+}

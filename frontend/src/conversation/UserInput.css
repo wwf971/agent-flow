@@ -1,0 +1,38 @@
+.composer-root {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+  background: #fff;
+  border: 1px solid #d9e1ef;
+  border-radius: 4px;
+  padding: 6px;
+}
+
+.composer-textarea {
+  flex: 1;
+  min-height: 64px;
+  max-height: 160px;
+  resize: vertical;
+  border: 1px solid #ccd8ea;
+  border-radius: 4px;
+  padding: 6px;
+  font-size: 14px;
+  box-sizing: border-box;
+}
+
+.send-btn {
+  min-width: 72px;
+  border: 1px solid #b9c7dd;
+  border-radius: 4px;
+  background: #fff;
+  color: #273a5c;
+  padding: 4px 8px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.send-btn:disabled {
+  color: #9aa6ba;
+  background: #f1f4f9;
+  cursor: default;
+}

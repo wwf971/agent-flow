@@ -1,7 +1,8 @@
-import { KeyboardEvent, useEffect, useRef, useState } from 'react'
+import { type CSSProperties, KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { observer } from 'mobx-react-lite'
 import { SpinningCircle, TreeView } from '@wwf971/react-comp-misc'
 import { appStore } from './store/appStore'
+import './ResourceTree.css'
 
 type ContextMenuState = {
   conversationId: string
@@ -13,13 +14,17 @@ type ContextMenuState = {
 
 const ResourceTree = observer(() => {
   const TreeViewComp = TreeView as any
+  const treeShellRef = useRef<HTMLDivElement | null>(null)
   const [itemExpandedById, setItemExpandedById] = useState<Record<string, boolean>>({
     templates: true,
     conversations: true,
     trashbin: true,
   })
   const [contextMenuState, setContextMenuState] = useState<ContextMenuState>(null)
+  const [conversationOverlayStyle, setConversationOverlayStyle] = useState<CSSProperties | null>(null)
   const conversationContext = contextMenuState ? appStore.conversationById[contextMenuState.conversationId] : null
+  const conversationListPresent = appStore.conversationListPresent
+  const isConversationBranchLocked = appStore.isConversationReorderSaving
   const isContextDeleteVisible = Boolean(
     conversationContext
     && conversationContext.isInTrashbin !== true,
@@ -28,6 +33,54 @@ const ResourceTree = observer(() => {
     conversationContext
     && conversationContext.isInTrashbin === true,
   )
+
+  useLayoutEffect(() => {
+    if (!isConversationBranchLocked || itemExpandedById.conversations !== true) {
+      setConversationOverlayStyle(null)
+      return undefined
+    }
+
+    let frameId = 0
+    const updateConversationOverlayStyle = () => {
+      frameId = 0
+      const shellElement = treeShellRef.current
+      const conversationRowElement = shellElement?.querySelector('[data-tree-item-id="conversations"]') as HTMLElement | null
+      const trashbinRowElement = shellElement?.querySelector('[data-tree-item-id="trashbin"]') as HTMLElement | null
+      if (!shellElement || !conversationRowElement) {
+        setConversationOverlayStyle(null)
+        return
+      }
+
+      const shellRect = shellElement.getBoundingClientRect()
+      const conversationRect = conversationRowElement.getBoundingClientRect()
+      const trashbinRect = trashbinRowElement?.getBoundingClientRect()
+      const top = Math.max(0, conversationRect.bottom - shellRect.top)
+      const bottom = trashbinRect ? trashbinRect.top - shellRect.top : shellRect.height
+      const height = Math.max(22, bottom - top)
+      setConversationOverlayStyle({
+        top,
+        left: 0,
+        right: 0,
+        height,
+      })
+    }
+
+    const requestUpdate = () => {
+      if (frameId) return
+      frameId = requestAnimationFrame(updateConversationOverlayStyle)
+    }
+
+    requestUpdate()
+    const treeElement = treeShellRef.current?.querySelector('.resource-tree-view')
+    treeElement?.addEventListener('scroll', requestUpdate)
+    window.addEventListener('resize', requestUpdate)
+
+    return () => {
+      if (frameId) window.cancelAnimationFrame(frameId)
+      treeElement?.removeEventListener('scroll', requestUpdate)
+      window.removeEventListener('resize', requestUpdate)
+    }
+  }, [conversationListPresent.length, isConversationBranchLocked, itemExpandedById.conversations])
 
   const openConversationContextMenu = (conversationId: string, event: MouseEvent) => {
     const conversationIdNormalized = appStore.normalizeConversationId(conversationId)
@@ -67,6 +120,53 @@ const ResourceTree = observer(() => {
     return appStore.normalizeConversationId(itemData?.conversationId)
   }
 
+  const getConversationIdFromTreeItemId = (itemId: unknown) => {
+    const itemIdText = String(itemId || '')
+    if (!itemIdText.startsWith('conversation:') || itemIdText === 'conversation:new') return ''
+    return appStore.normalizeConversationId(itemIdText.slice('conversation:'.length))
+  }
+
+  const getIsPresentConversationTreeItem = (itemId: unknown) => {
+    const conversationId = getConversationIdFromTreeItemId(itemId)
+    if (!conversationId) return false
+    return itemDataById[`conversation:${conversationId}`]?.isConversationPresentItem === true
+  }
+
+  const getIsConversationDropTargetAllowed = (targetItemId: unknown, drop: any) => {
+    const targetItemIdText = String(targetItemId || '')
+    if (getIsPresentConversationTreeItem(targetItemIdText)) return true
+    return (
+      targetItemIdText === 'conversation:new'
+      && drop?.type === 'after'
+      && drop?.itemParentId === 'conversations'
+    )
+  }
+
+  const getIsConversationDropBoundaryAllowed = (drop: any) => {
+    const itemBeforeId = String(drop?.itemBeforeId || '')
+    const itemAfterId = String(drop?.itemAfterId || '')
+    if (itemBeforeId && itemBeforeId !== 'conversation:new' && !getIsPresentConversationTreeItem(itemBeforeId)) return false
+    if (itemAfterId && !getIsPresentConversationTreeItem(itemAfterId)) return false
+    return true
+  }
+
+  const getIsConversationDropAllowed = (itemId: unknown, targetItemId: unknown, drop: any) => {
+    if (appStore.isConversationReorderSaving) return false
+    if (drop?.type !== 'before' && drop?.type !== 'after') return false
+    if (drop?.itemParentId !== 'conversations') return false
+    if (!getIsPresentConversationTreeItem(itemId)) return false
+    if (!getIsConversationDropTargetAllowed(targetItemId, drop)) return false
+    return getIsConversationDropBoundaryAllowed(drop)
+  }
+
+  const getIsConversationMoveAllowed = (itemId: unknown, drop: any) => {
+    if (appStore.isConversationReorderSaving) return false
+    if (drop?.type !== 'before' && drop?.type !== 'after') return false
+    if (drop?.itemParentId !== 'conversations') return false
+    if (!getIsPresentConversationTreeItem(itemId)) return false
+    return getIsConversationDropBoundaryAllowed(drop)
+  }
+
   const itemDataById: Record<string, any> = {
     templates: {
       id: 'templates',
@@ -78,13 +178,12 @@ const ResourceTree = observer(() => {
     },
     conversations: {
       id: 'conversations',
-      text: `Conversations (${appStore.conversationListActive.length + appStore.conversationListHistory.length})`,
+      text: `Conversations (${conversationListPresent.length})`,
       isLeaf: false,
       isExpanded: itemExpandedById.conversations === true,
       childrenIds: [
         'conversation:new',
-        ...appStore.conversationListActive.map((item) => `conversation:${item.conversationId}`),
-        ...appStore.conversationListHistory.map((item) => `conversation:${item.conversationId}`),
+        ...conversationListPresent.map((item) => `conversation:${item.conversationId}`),
       ],
       childrenLoadState: appStore.isConversationListLoading ? 'loading' : 'loaded',
     },
@@ -130,31 +229,56 @@ const ResourceTree = observer(() => {
       childrenLoadState: 'loaded',
       conversationId: conversation.conversationId,
       isConversationItem: true,
+      isConversationPresentItem: !isInTrashbin,
     }
   })
 
   return (
     <>
-      <TreeViewComp
-        data={{
-          itemRootIds: ['templates', 'conversations', 'trashbin'],
-          itemDataById,
-          itemSelectedId: appStore.treeSelectedItemId,
-        }}
-        config={{
-          className: 'resource-tree-view',
-          getItemComp: (itemData: any) => {
-            if (itemData?.isConversationItem) return ConversationTreeItem
-            return null
-          },
-          getItemRowClassName: (itemData: any) => {
-            if (itemData?.isConversationItem) return 'resource-tree-conversation-row'
-            return ''
-          },
-        }}
-        onEvent={async (eventType: string, eventData: any) => {
+      <div ref={treeShellRef} className="resource-tree-shell">
+        <TreeViewComp
+          data={{
+            itemRootIds: ['templates', 'conversations', 'trashbin'],
+            itemDataById,
+            itemSelectedId: appStore.treeSelectedItemId,
+          }}
+          config={{
+            className: 'resource-tree-view',
+            getItemComp: (itemData: any) => {
+              if (itemData?.isConversationItem) return ConversationTreeItem
+              return null
+            },
+            getItemRowClassName: (itemData: any) => {
+              const classNameList = []
+              if (itemData?.id === 'conversations') classNameList.push('resource-tree-conversation-root-row')
+              if (itemData?.id === 'conversation:new') classNameList.push('resource-tree-conversation-new-row')
+              if (itemData?.isConversationItem) classNameList.push('resource-tree-conversation-row')
+              if (
+                isConversationBranchLocked
+                && (
+                  itemData?.id === 'conversations'
+                  || itemData?.id === 'conversation:new'
+                  || itemData?.isConversationItem
+                )
+              ) {
+                classNameList.push('resource-tree-conversation-locked-row')
+              }
+              return classNameList.join(' ')
+            },
+            isItemDragEnabled: true,
+            getIsItemDraggable: (itemData: any) => {
+              if (appStore.isConversationReorderSaving) return false
+              if (appStore.conversationRenameEditId === appStore.normalizeConversationId(itemData?.conversationId)) return false
+              return itemData?.isConversationPresentItem === true
+            },
+            getItemDropStatus: ({ itemId, targetItemId, drop }: any) => ({
+              isDropAllowed: getIsConversationDropAllowed(itemId, targetItemId, drop),
+            }),
+          }}
+          onEvent={async (eventType: string, eventData: any) => {
           if (eventType === 'toggleExpand') {
             const itemId = String(eventData?.itemId || '')
+            if (isConversationBranchLocked && itemId === 'conversations') return { code: 0 }
             const isExpandedNext = eventData?.nextIsExpanded === true
             setItemExpandedById((itemExpandedPrevious) => ({
               ...itemExpandedPrevious,
@@ -166,6 +290,16 @@ const ResourceTree = observer(() => {
             const itemId = String(eventData?.itemId || '')
             const itemData = eventData?.itemData
             setContextMenuState(null)
+            if (
+              isConversationBranchLocked
+              && (
+                itemId === 'conversations'
+                || itemId === 'conversation:new'
+                || itemData?.isConversationItem
+              )
+            ) {
+              return { code: 0 }
+            }
             if (itemId === 'templates') return { code: 0 }
             if (itemId === 'conversations') return { code: 0 }
             if (itemId === 'trashbin') return { code: 0 }
@@ -185,6 +319,17 @@ const ResourceTree = observer(() => {
           if (eventType === 'itemContextMenu') {
             const itemData = eventData?.itemData
             const event = eventData?.event as MouseEvent
+            if (
+              isConversationBranchLocked
+              && (
+                eventData?.itemId === 'conversations'
+                || eventData?.itemId === 'conversation:new'
+                || itemData?.isConversationItem
+              )
+            ) {
+              setContextMenuState(null)
+              return { code: 0 }
+            }
             const conversationId = appStore.normalizeConversationId(itemData?.conversationId)
             if (!conversationId) {
               setContextMenuState(null)
@@ -192,9 +337,30 @@ const ResourceTree = observer(() => {
             }
             openConversationContextMenu(conversationId, event)
           }
+          if (eventType === 'moveItem') {
+            const itemId = eventData?.itemId
+            const drop = eventData?.drop
+            if (!getIsConversationMoveAllowed(itemId, drop)) return { code: -1 }
+            const conversationId = getConversationIdFromTreeItemId(itemId)
+            if (!conversationId) return { code: -1 }
+            await appStore.reorderConversation(
+              conversationId,
+              getConversationIdFromTreeItemId(drop?.itemBeforeId),
+              getConversationIdFromTreeItemId(drop?.itemAfterId),
+            )
+            return { code: 0 }
+          }
           return { code: 0 }
-        }}
-      />
+          }}
+        />
+        {isConversationBranchLocked && conversationOverlayStyle ? (
+          <div className="resource-tree-conversation-lock-overlay" style={conversationOverlayStyle}>
+            <div className="resource-tree-conversation-lock-spinner">
+              <SpinningCircle width={16} height={16} color="#6f7d92" />
+            </div>
+          </div>
+        ) : null}
+      </div>
       {contextMenuState ? (
         <>
           <div

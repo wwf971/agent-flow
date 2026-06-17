@@ -1,6 +1,7 @@
 import { makeAutoObservable, runInAction } from 'mobx'
 import { ApiRequestError, requestAuthenticatedJson } from '../apiRequest'
 import { isUpdateWebSocketEnabled, resolveWebSocketUrl } from '../publicPath'
+import { sortByGlobalRank } from './lexoRank'
 
 export const PAGE_KEY = {
   template: 'template',
@@ -18,6 +19,7 @@ export type ConversationItem = {
   conversationId: string
   metadata: Record<string, any>
   isInTrashbin?: boolean
+  rankGlobal: string
   createAt: string
   updateAt: string
 }
@@ -79,6 +81,7 @@ class AppStore {
   conversationRenameSurfaceText = ''
   conversationRenameDraftText = ''
   isConversationRenameSaving = false
+  isConversationReorderSaving = false
   isTemplateListLoading = false
   isConversationListLoading = false
   isEventListLoading = false
@@ -103,6 +106,7 @@ class AppStore {
       conversationId: this.normalizeConversationId(item.conversationId),
       metadata: item.metadata || {},
       isInTrashbin: item.isInTrashbin === true,
+      rankGlobal: String(item.rankGlobal || ''),
       createAt: String(item.createAt || ''),
       updateAt: String(item.updateAt || ''),
     }
@@ -261,17 +265,21 @@ class AppStore {
   }
 
   get conversationListActive() {
-    return this.conversationList.filter((item) => (
+    return sortByGlobalRank(this.conversationList.filter((item) => (
       item.isInTrashbin !== true
       && String(item.metadata?.statusText || 'active') !== 'archived'
-    ))
+    )))
   }
 
   get conversationListHistory() {
-    return this.conversationList.filter((item) => (
+    return sortByGlobalRank(this.conversationList.filter((item) => (
       item.isInTrashbin !== true
       && String(item.metadata?.statusText || '') === 'archived'
-    ))
+    )))
+  }
+
+  get conversationListPresent() {
+    return sortByGlobalRank(this.conversationList.filter((item) => item.isInTrashbin !== true))
   }
 
   get conversationListTrashbin() {
@@ -761,6 +769,41 @@ class AppStore {
       runInAction(() => {
         this.errorText = String(error)
         this.noticeText = ''
+      })
+    }
+  }
+
+  async reorderConversation(conversationId: string, conversationIdBefore: string, conversationIdAfter: string) {
+    const conversationIdNormalized = this.normalizeConversationId(conversationId)
+    if (!conversationIdNormalized || this.isConversationReorderSaving) return
+    runInAction(() => {
+      this.errorText = ''
+      this.noticeText = 'Reordering conversation'
+      this.isConversationReorderSaving = true
+    })
+    try {
+      const data = await requestAuthenticatedJson<ConversationItem>('/api/conversation/reorder', {
+        method: 'POST',
+        body: JSON.stringify({
+          conversationId: conversationIdNormalized,
+          conversationIdBefore: this.normalizeConversationId(conversationIdBefore),
+          conversationIdAfter: this.normalizeConversationId(conversationIdAfter),
+          timezone: new Date().getTimezoneOffset() * -1,
+        }),
+      })
+      runInAction(() => {
+        this.upsertConversation(data)
+        this.noticeText = ''
+      })
+      await this.requestConversationList(true)
+    } catch (error: unknown) {
+      runInAction(() => {
+        this.errorText = String(error)
+        this.noticeText = ''
+      })
+    } finally {
+      runInAction(() => {
+        this.isConversationReorderSaving = false
       })
     }
   }

@@ -1,0 +1,58 @@
+.conversation-value-popup-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(10, 20, 35, 0.28);
+  padding: 12px;
+}
+
+.conversation-value-popup {
+  width: min(860px, 92vw);
+  max-height: 82vh;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid #ccd8ea;
+  border-radius: 4px;
+  background: #fff;
+}
+
+.conversation-value-popup-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  border-bottom: 1px solid #e2e8f2;
+  padding: 6px;
+}
+
+.conversation-value-popup-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1d2c44;
+}
+
+.conversation-value-popup-close-btn {
+  min-height: 24px;
+  padding: 3px 7px;
+  border: 1px solid #c8d3e3;
+  border-radius: 3px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.conversation-value-popup-body {
+  overflow: auto;
+  padding: 6px;
+}
+
+.conversation-value-popup-text {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: 13px;
+  line-height: 1.4;
+}

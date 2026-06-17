@@ -1,0 +1,8 @@
+.conversation-json-segment {
+  border: 1px solid #e2e8f2;
+  border-radius: 4px;
+  background: #f8fbff;
+  padding: 5px;
+  font-size: 12px;
+  line-height: 1.35;
+}

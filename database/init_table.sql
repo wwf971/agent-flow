@@ -8,6 +8,7 @@ create table conversation (
   id bigint primary key,
   metadata jsonb not null default '{"evetList":[]}'::jsonb,
   isInTrashbin boolean not null default false,
+  rankGlobal text,
   createAt timestamptz default now(),
   createAtTimezone smallint,
   updateAt timestamptz default now(),
@@ -37,6 +38,9 @@ create table event (
 
 create index conversation_update_at_idx
   on conversation(updateAt desc, id desc);
+
+create index conversation_rank_global_idx
+  on conversation(isInTrashbin, rankGlobal, updateAt desc, id desc);
 
 create index event_conversation_create_at_idx
   on event(conversationId, createAt, id);

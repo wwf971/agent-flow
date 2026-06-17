@@ -1,4 +1,5 @@
 import { observer } from 'mobx-react-lite'
+import './RoleCard.css'
 
 type RoleCardProps = {
   roleText: string

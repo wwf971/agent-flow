@@ -87,6 +87,65 @@ One-shot templates such as `mcp-tool-all` should set `statusText` to `completed`
 
 When an interactive tool call returns `is_terminated = true`, the backend should set `statusText` to `completed`, set `isUserTurn` to false, and keep the termination reason in metadata when available.
 
+## Turn Shape
+
+The timeline is an event list, but it is useful to think about three major turn shapes:
+
+- User turn: the latest committed input is `userMessage / textSimple`. The backend sends this plus history to the agent or template orchestrator.
+- Agent turn: the latest agent output is either `agentMessage / textSimple` or `agentMessage / toolCall`.
+- Orchestrator turn: the orchestrator appends instructions or tool feedback as `orchestratorMessage / textSimple` or `orchestratorMessage / toolResult`.
+
+Normal free chat is simple:
+
+```text
+userMessage / textSimple
+agentMessage / textSimple
+```
+
+The user can type again when conversation metadata has `statusText = active` and `isUserTurn = true`.
+
+Tool calling adds an orchestrator turn between agent steps:
+
+```text
+orchestratorMessage / textSimple
+agentMessage / toolCall
+orchestratorMessage / toolResult
+agentMessage / textSimple
+userMessage / textSimple
+agentMessage / toolCall
+orchestratorMessage / toolResult
+```
+
+The first `orchestratorMessage / textSimple` is often the template startup prompt. A tool call itself is stored as `agentMessage / toolCall`; the tool execution result is stored as `orchestratorMessage / toolResult`. The agent sees the orchestrator result text as the next model input, but the persisted source stays `orchestratorMessage`, not `userMessage`.
+
+## Implementation Mapping
+
+The database does not have a separate `turnType` column. The current turn shape is inferred from:
+
+- `event.typeText`
+- `event.subtypeText`
+- `conversation.metadata.statusText`
+- `conversation.metadata.isUserTurn`
+- the ordered event IDs in `conversation.metadata.evetList`
+
+The backend appends events with `create_event_in_db()`. That function inserts one event row and updates the parent conversation `evetList` in the same transaction.
+
+`BackendOrchestrator` mirrors the same model in memory:
+
+- `metadata`: current orchestrator metadata, including `templateKey` and `iterType`
+- `metadata_new`: next metadata draft before it is committed
+- `event_list`: loaded event history for the conversation
+- `event_index_last`: index of the last loaded event
+- `iter_type`: coarse iteration input, currently `templateStart` or `userMessage`
+
+`BackendOrchestrator.iter()` is the central branch:
+
+- `templateStart` calls `iter_template_start()`
+- `free-talk` calls `iter_free_talk_turn()`
+- other templates call `iter_template_turn()`
+
+Template orchestrators can then use the latest event history to decide whether the next output should be an agent message, a tool call result, or a final message. This keeps the database model append-first while still allowing one orchestrator iteration to append more than one event.
+
 ## Content Types
 
 Content type values are resolved through `config/conversation_content_type.yaml`.

@@ -5,6 +5,8 @@ import Message from './Message'
 import MessagePending from './MessagePending'
 import UserInput from './UserInput'
 import { appStore } from '../store/appStore'
+import '../panel/Panel.css'
+import './ConversationPanel.css'
 
 const ConversationPanel = observer(() => {
   const messageListEndRef = useRef<HTMLDivElement | null>(null)

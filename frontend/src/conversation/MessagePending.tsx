@@ -2,6 +2,7 @@ import { observer } from 'mobx-react-lite'
 import { SpinningCircle } from '@wwf971/react-comp-misc'
 import { MessagePendingData } from '../store/appStore'
 import RoleCard from './RoleCard'
+import './Message.css'
 
 type MessagePendingProps = {
   data: MessagePendingData

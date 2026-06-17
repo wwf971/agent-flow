@@ -1,6 +1,7 @@
 import { observer } from 'mobx-react-lite'
 import { EndpointCard } from '@wwf971/react-comp-misc'
 import { appStore } from '../store/appStore'
+import './Panel.css'
 
 const TemplatePanel = observer(() => {
   const template = appStore.templateSelected

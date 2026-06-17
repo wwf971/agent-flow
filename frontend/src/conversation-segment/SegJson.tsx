@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import { JsonCompMobx } from '@wwf971/react-comp-misc'
 import AbbreviatedValue from './AbbreviatedValue'
+import './SegJson.css'
 
 type DisplayRules = Record<string, string>
 

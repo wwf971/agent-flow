@@ -2,6 +2,7 @@ import { KeyboardEvent } from 'react'
 import { observer } from 'mobx-react-lite'
 import { SpinningCircle } from '@wwf971/react-comp-misc'
 import { appStore } from '../store/appStore'
+import './UserInput.css'
 
 type UserInputProps = {
   isInputEnabled: boolean

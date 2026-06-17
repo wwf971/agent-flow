@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import SegValuePopup from './SegValuePopup'
+import './AbbreviatedValue.css'
 
 type AbbreviatedValueProps = {
   pathText: string

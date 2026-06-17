@@ -4,6 +4,7 @@ import * as ReactCompMisc from '@wwf971/react-comp-misc'
 import { EventItem } from '../store/appStore'
 import SegMessage, { SegMessageData } from '../conversation-segment/SegMessage'
 import RoleCard from './RoleCard'
+import './Message.css'
 
 const SegmentedControl = (ReactCompMisc as any).SegmentedControl
 

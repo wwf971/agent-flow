@@ -1,0 +1,36 @@
+.conversation-role-card {
+  min-height: 20px;
+  box-sizing: border-box;
+  border: 1px solid #d9e1ef;
+  border-radius: 4px;
+  padding: 3px 5px;
+  font-size: 12px;
+  line-height: 1.2;
+  color: #34435d;
+  text-align: center;
+}
+
+.conversation-role-card-user {
+  background: #f2f7ff;
+  border-color: #c9d9f0;
+}
+
+.conversation-role-card-agent {
+  background: #f8fbff;
+  border-color: #d4e0f0;
+}
+
+.conversation-role-card-orchestrator {
+  background: #fbfaf2;
+  border-color: #e4dfbe;
+}
+
+.conversation-role-card-error {
+  border-color: #e2b5b5;
+  background: #fff7f7;
+}
+
+.conversation-role-card-pending {
+  background: #f7f7fb;
+  border-color: #d8d8ea;
+}
