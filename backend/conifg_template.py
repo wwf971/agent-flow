@@ -14,7 +14,7 @@ TEMPLATE_FALLBACK = dict(TEMPLATE_LIST[0])
 
 
 def list_templates():
-    return [dict(item) for item in TEMPLATE_LIST]
+    return [dict(item) for item in TEMPLATE_LIST if item.get("isInternal") is not True]
 
 
 def get_template_by_key(template_key: str):

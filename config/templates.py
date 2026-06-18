@@ -64,4 +64,22 @@ TEMPLATE_LIST = [
             "isUserTurn": True,
         },
     },
+    {
+        "key": "subagent-basic",
+        "name": "Subagent Basic",
+        "description": "Internal subagent template for backend subagent tool calls.",
+        "modulePath": "test/_2_sub_agent/orchestrator_subagent.py",
+        "isStartBackground": False,
+        "isUserMessageAccepted": False,
+        "isInternal": True,
+        "metadataCreate": {
+            "statusText": "active",
+            "isUserTurn": False,
+        },
+        "metadataStartFinish": {
+            "statusText": "completed",
+            "isUserTurn": False,
+            "endStatusText": "completed",
+        },
+    },
 ]

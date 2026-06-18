@@ -2,7 +2,7 @@
 
 ## Scope
 
-The app stores each conversation as an ordered event timeline. The first stable boundary is the conversation and event model, not the current hard-coded template implementation.
+The app stores each conversation as an ordered event timeline. The stable boundary is the conversation and event model, not template implementation details.
 
 This model covers:
 
@@ -10,9 +10,18 @@ This model covers:
 - orchestrator messages
 - agent messages
 - tool calls and tool results
+- subagent start, result, and return events
 - abnormal backend termination
 
-Prompt versions, tool versions, model versions, flow definitions, and attachment storage are expected to become referenced resources later.
+Prompt versions, tool versions, model versions, flow definitions, and attachment storage can be referenced resources.
+
+## Relationship To Orchestrator
+
+The conversation model describes durable state.
+
+The orchestrator model describes how state changes. An orchestrator reads conversation metadata and ordered events, then produces new events. Backend code persists those events and related metadata changes.
+
+The conversation document owns event meaning and storage rules. The orchestrator document owns template selection, iteration input, model calls, tool loops, and subagent flow.
 
 ## Conversation
 
@@ -25,16 +34,16 @@ Recommended metadata keys:
 | `title` | string | optional display title |
 | `description` | string | optional longer note |
 | `tagList` | string array | optional user labels |
-| `statusText` | string | `active`, `completed`, `archived`, `failed`, or later status |
+| `statusText` | string | `starting`, `active`, `completed`, `archived`, `failed`, or other status |
 | `templateKey` | string | template key used by the orchestrator |
 | `templateName` | string | display name copied from the template |
-| `modelText` | string | current model label when useful |
+| `modelText` | string | model label when useful |
 | `sourceText` | string | `manual`, `experiment`, or other source |
 | `isUserTurn` | boolean | true when user input should be enabled |
 | `endStatusText` | string | optional final status such as `abnormal` |
-| `evetList` | string array | ordered list of event IDs |
+| `eventList` | string array | ordered list of event IDs |
 
-`evetList` is intentionally documented with the current stored spelling. A later migration can rename it once all code and existing data can move together.
+`eventList` stores event IDs in timeline order.
 
 Trashbin state is stored on the conversation row as `isInTrashbin`. Missing values should be treated as `false`.
 
@@ -77,6 +86,9 @@ Initial `subtypeText` values:
 | `agentMessage` | `textSimple` | plain model text |
 | `agentMessage` | `toolCall` | model requested tool execution |
 | `orchestratorMessage` | `toolResult` | tool execution result |
+| `orchestratorMessage` | `subAgentStart` | parent started child conversations |
+| `orchestratorMessage` | `subAgentResult` | child conversations returned to parent |
+| `orchestratorMessage` | `subAgentReturn` | child conversation returned its final value |
 | `EndAbnormal` | `BackendException` | backend exception detail in `contentText` |
 
 When a template startup or turn fails after a conversation exists, the backend should append `EndAbnormal` with subtype `BackendException`, set `statusText` to `failed`, and disable user input with `isUserTurn = false`.
@@ -118,33 +130,33 @@ orchestratorMessage / toolResult
 
 The first `orchestratorMessage / textSimple` is often the template startup prompt. A tool call itself is stored as `agentMessage / toolCall`; the tool execution result is stored as `orchestratorMessage / toolResult`. The agent sees the orchestrator result text as the next model input, but the persisted source stays `orchestratorMessage`, not `userMessage`.
 
-## Implementation Mapping
+Subagent orchestration adds parent and child events:
 
-The database does not have a separate `turnType` column. The current turn shape is inferred from:
+```text
+agentMessage / toolCall
+orchestratorMessage / subAgentStart
+orchestratorMessage / subAgentResult
+```
+
+The child conversation ends by appending:
+
+```text
+orchestratorMessage / subAgentReturn
+```
+
+## Source Of Truth
+
+The database does not have a separate `turnType` column. Turn shape is inferred from durable state:
 
 - `event.typeText`
 - `event.subtypeText`
 - `conversation.metadata.statusText`
 - `conversation.metadata.isUserTurn`
-- the ordered event IDs in `conversation.metadata.evetList`
+- the ordered event IDs in `conversation.metadata.eventList`
 
-The backend appends events with `create_event_in_db()`. That function inserts one event row and updates the parent conversation `evetList` in the same transaction.
+The backend appends events with `create_event_in_db()`. That function inserts one event row and updates the parent conversation `eventList` in the same transaction.
 
-`BackendOrchestrator` mirrors the same model in memory:
-
-- `metadata`: current orchestrator metadata, including `templateKey` and `iterType`
-- `metadata_new`: next metadata draft before it is committed
-- `event_list`: loaded event history for the conversation
-- `event_index_last`: index of the last loaded event
-- `iter_type`: coarse iteration input, currently `templateStart` or `userMessage`
-
-`BackendOrchestrator.iter()` is the central branch:
-
-- `templateStart` calls `iter_template_start()`
-- `free-talk` calls `iter_free_talk_turn()`
-- other templates call `iter_template_turn()`
-
-Template orchestrators can then use the latest event history to decide whether the next output should be an agent message, a tool call result, or a final message. This keeps the database model append-first while still allowing one orchestrator iteration to append more than one event.
+The conversation model does not decide how the next event is produced. Orchestration concepts and templates are documented in `doc/orchesatrator.md`.
 
 ## Content Types
 
@@ -160,7 +172,7 @@ Initial usage:
 
 For pure text conversation, use `contentType = 1`.
 
-For tool results and later structured messages, `contentType = 3` should preserve the exact text sent to the agent in `contentText` and store displayable structured data in `contentJson`.
+For tool results and structured messages, `contentType = 3` should preserve the exact text sent to the agent in `contentText` and store displayable structured data in `contentJson`.
 
 Structured `contentJson` uses a versioned segment envelope:
 
@@ -190,14 +202,14 @@ Structured `contentJson` uses a versioned segment envelope:
 }
 ```
 
-Initial segment types:
+Segment types:
 
 | type | Notes |
 |------|-------|
 | `text` | plain text segment |
 | `json` | structured JSON segment |
 
-`displayRules` is an optional map of dot-paths to display behavior. The first supported behavior is `popup`, meaning the normal message card may show an abbreviated preview and provide a full-value popup.
+`displayRules` is an optional map of dot-paths to display behavior. `popup` means the normal message card may show an abbreviated preview and provide a full-value popup.
 
 ## Service Rules
 

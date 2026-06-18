@@ -20,6 +20,14 @@ export type ConversationItem = {
   metadata: Record<string, any>
   isInTrashbin?: boolean
   rankGlobal: string
+  version?: number
+  stateCode?: number
+  execStatusCode?: number
+  leaseId?: string
+  leaseWorkerId?: string
+  leaseExpireAt?: string
+  leaseRetryCount?: number
+  leaseRetryAfterAt?: string
   createAt: string
   updateAt: string
 }
@@ -45,6 +53,7 @@ export type MessagePendingData = {
   roleText: string
   typeText: string
   subtypeText: string
+  detailLineList?: string[]
 }
 
 export type OperationState = {
@@ -107,6 +116,14 @@ class AppStore {
       metadata: item.metadata || {},
       isInTrashbin: item.isInTrashbin === true,
       rankGlobal: String(item.rankGlobal || ''),
+      version: Number(item.version || 0),
+      stateCode: Number(item.stateCode || 100),
+      execStatusCode: Number(item.execStatusCode || 0),
+      leaseId: String(item.leaseId || ''),
+      leaseWorkerId: String(item.leaseWorkerId || ''),
+      leaseExpireAt: String(item.leaseExpireAt || ''),
+      leaseRetryCount: Number(item.leaseRetryCount || 0),
+      leaseRetryAfterAt: String(item.leaseRetryAfterAt || ''),
       createAt: String(item.createAt || ''),
       updateAt: String(item.updateAt || ''),
     }
@@ -230,6 +247,7 @@ class AppStore {
         roleText: '',
         typeText: '',
         subtypeText: '',
+        detailLineList: [],
       }
     }
     const statusText = String(conversation.metadata?.statusText || 'active')
@@ -246,6 +264,7 @@ class AppStore {
         roleText: '',
         typeText: '',
         subtypeText: '',
+        detailLineList: [],
       }
     }
     if (statusText === 'failed' || statusText === 'archived' || conversation.isInTrashbin === true) {
@@ -254,6 +273,7 @@ class AppStore {
         roleText: '',
         typeText: '',
         subtypeText: '',
+        detailLineList: [],
       }
     }
     return {
@@ -261,7 +281,36 @@ class AppStore {
       roleText: isTemplateStarting ? 'Agent' : 'Agent',
       typeText: isTemplateStarting ? 'agentMessage' : 'agentMessage',
       subtypeText: 'pending',
+      detailLineList: this.buildPendingDetailLineList(conversation),
     }
+  }
+
+  buildPendingDetailLineList(conversation: ConversationItem) {
+    const lineList: string[] = []
+    const execStatusCode = Number(conversation.execStatusCode || 0)
+    const retryCount = Number(conversation.leaseRetryCount || 0)
+    if (execStatusCode === 10) {
+      lineList.push('Status: Pending')
+    } else if (execStatusCode === 20) {
+      lineList.push('Status: Running')
+    } else if (execStatusCode === 30) {
+      lineList.push('Status: Retry Wait')
+    }
+    lineList.push(`Retry Num: ${retryCount}`)
+    if (conversation.leaseWorkerId) {
+      lineList.push(`Worker: ${conversation.leaseWorkerId}`)
+    }
+    if (conversation.leaseExpireAt) {
+      lineList.push(`Lease Expire: ${conversation.leaseExpireAt}`)
+    }
+    if (conversation.leaseRetryAfterAt) {
+      lineList.push(`Retry After: ${conversation.leaseRetryAfterAt}`)
+    }
+    const errorText = String(conversation.metadata?.iterationErrorText || '')
+    if (errorText) {
+      lineList.push(`Last Error: ${errorText}`)
+    }
+    return lineList
   }
 
   get conversationListActive() {

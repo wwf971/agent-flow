@@ -62,18 +62,67 @@ def _has_conversation_rank_global_column(db):
         return cursor.fetchone() is not None
 
 
+def _has_conversation_parent_id_column(db):
+    with closing(dict_cursor(db)) as cursor:
+        cursor.execute(
+            """
+            select 1
+            from information_schema.columns
+            where table_schema = current_schema()
+              and table_name = 'conversation'
+              and lower(column_name) = 'parentid'
+            limit 1
+            """
+        )
+        return cursor.fetchone() is not None
+
+
+def _has_conversation_iter_column(db):
+    with closing(dict_cursor(db)) as cursor:
+        cursor.execute(
+            """
+            select 1
+            from information_schema.columns
+            where table_schema = current_schema()
+              and table_name = 'conversation'
+              and lower(column_name) = 'statecode'
+            limit 1
+            """
+        )
+        return cursor.fetchone() is not None
+
+
 def _get_conversation_select_sql(db):
     trashbin_select = "isInTrashbin" if _has_conversation_trashbin_column(db) else "false as isInTrashbin"
     rank_global_select = "rankGlobal" if _has_conversation_rank_global_column(db) else "null as rankGlobal"
-    return f"id, metadata, {trashbin_select}, {rank_global_select}, createAt, createAtTimezone, updateAt, updateAtTimezone"
+    parent_id_select = "parentId" if _has_conversation_parent_id_column(db) else "null as parentId"
+    iter_select = (
+        "version, stateCode, execStatusCode, leaseId, leaseWorkerId, leaseExpireAt, leaseRetryCount, leaseRetryAfterAt"
+        if _has_conversation_iter_column(db)
+        else """
+             0 as version,
+             100 as stateCode,
+             0 as execStatusCode,
+             null as leaseId,
+             null as leaseWorkerId,
+             null as leaseExpireAt,
+             0 as leaseRetryCount,
+             null as leaseRetryAfterAt
+        """
+    )
+    return f"id, metadata, {trashbin_select}, {rank_global_select}, {parent_id_select}, {iter_select}, createAt, createAtTimezone, updateAt, updateAtTimezone"
 
 
 def normalize_metadata(metadata: Any):
     data = dict(metadata) if isinstance(metadata, dict) else {}
-    evet_list = data.get("evetList")
-    if not isinstance(evet_list, list):
-        evet_list = []
-    data["evetList"] = [str(item) for item in evet_list if str(item or "").strip()]
+    event_list = data.get("eventList")
+    if not isinstance(event_list, list):
+        event_list = []
+    data["eventList"] = [str(item) for item in event_list if str(item or "").strip()]
+    child_conversation_id_list = data.get("childConversationIdList")
+    if not isinstance(child_conversation_id_list, list):
+        child_conversation_id_list = []
+    data["childConversationIdList"] = [str(item) for item in child_conversation_id_list if str(item or "").strip()]
     return data
 
 
@@ -84,6 +133,15 @@ def row_to_conversation(row):
         "metadata": metadata,
         "isInTrashbin": bool(row.get("isintrashbin")),
         "rankGlobal": str(row.get("rankglobal") or ""),
+        "parentId": str(row.get("parentid") or ""),
+        "version": int(row.get("version") or 0),
+        "stateCode": int(row.get("statecode") or 100),
+        "execStatusCode": int(row.get("execstatuscode") or 0),
+        "leaseId": str(row.get("leaseid") or ""),
+        "leaseWorkerId": str(row.get("leaseworkerid") or ""),
+        "leaseExpireAt": str(row.get("leaseexpireat") or ""),
+        "leaseRetryCount": int(row.get("leaseretrycount") or 0),
+        "leaseRetryAfterAt": str(row.get("leaseretryafterat") or ""),
         "createAt": str(row["createat"] or ""),
         "createAtTimezone": row["createattimezone"],
         "updateAt": str(row["updateat"] or ""),
@@ -91,16 +149,20 @@ def row_to_conversation(row):
     }
 
 
-def _get_rank_global_for_new_conversation(db):
+def _get_rank_global_for_new_conversation(db, parent_id: int | None = None):
+    if parent_id is not None:
+        return ""
     if not _has_conversation_rank_global_column(db):
         return ""
+    parent_filter_sql = "and parentId is null" if _has_conversation_parent_id_column(db) else ""
     with closing(dict_cursor(db)) as cursor:
         cursor.execute(
-            """
+            f"""
             select rankGlobal
             from conversation
             where isInTrashbin = false
-              and rankGlobal ~ '^[0-9A-Za-z]{12}$'
+              {parent_filter_sql}
+              and rankGlobal ~ '^[0-9A-Za-z]{{12}}$'
             order by rankGlobal asc
             limit 1
             """
@@ -113,11 +175,12 @@ def _get_rank_global_for_new_conversation(db):
     _rebalance_present_conversation_ranks(db, [])
     with closing(dict_cursor(db)) as cursor:
         cursor.execute(
-            """
+            f"""
             select rankGlobal
             from conversation
             where isInTrashbin = false
-              and rankGlobal ~ '^[0-9A-Za-z]{12}$'
+              {parent_filter_sql}
+              and rankGlobal ~ '^[0-9A-Za-z]{{12}}$'
             order by rankGlobal asc
             limit 1
             """
@@ -126,12 +189,60 @@ def _get_rank_global_for_new_conversation(db):
     return get_rank_between(None, row["rankglobal"] if row else None)
 
 
-def create_conversation_in_db(db, metadata: Any, timezone: int):
+def _normalize_parent_id(value: Any):
+    text = _to_text(value)
+    return int(text) if text else None
+
+
+def _append_child_conversation_id_to_parent(db, parent_id: int, child_conversation_id: int, timezone: int):
+    with closing(dict_cursor(db)) as cursor:
+        cursor.execute("select metadata from conversation where id = %s for update", (parent_id,))
+        row = cursor.fetchone()
+        if not row:
+            raise RuntimeError("parent conversation not found")
+        metadata_parent = normalize_metadata(row["metadata"])
+        child_id_text = str(child_conversation_id)
+        child_id_list = metadata_parent["childConversationIdList"]
+        if child_id_text not in child_id_list:
+            child_id_list.append(child_id_text)
+        metadata_parent["childConversationIdList"] = child_id_list
+        cursor.execute(
+            """
+            update conversation
+            set metadata = %s::jsonb,
+                updateAt = now(),
+                updateAtTimezone = %s
+            where id = %s
+            """,
+            (json.dumps(metadata_parent), timezone, parent_id),
+        )
+    return metadata_parent
+
+
+def create_conversation_in_db(db, metadata: Any, timezone: int, parent_id: int | None = None):
     conversation_id = create_ms48_id()
     metadata_normalized = normalize_metadata(metadata)
-    rank_global = _get_rank_global_for_new_conversation(db)
+    parent_id_normalized = _normalize_parent_id(parent_id)
+    if parent_id_normalized is not None and not _has_conversation_parent_id_column(db):
+        raise RuntimeError("conversation.parentId column is missing. Run script/_4_migrate_subagent.py")
+    rank_global = _get_rank_global_for_new_conversation(db, parent_id_normalized)
     with closing(db.cursor()) as cursor:
-        if _has_conversation_rank_global_column(db):
+        if _has_conversation_rank_global_column(db) and _has_conversation_parent_id_column(db):
+            cursor.execute(
+                """
+                insert into conversation(
+                    id,
+                    metadata,
+                    rankGlobal,
+                    parentId,
+                    createAtTimezone,
+                    updateAtTimezone
+                )
+                values (%s, %s::jsonb, %s, %s, %s, %s)
+                """,
+                (conversation_id, json.dumps(metadata_normalized), rank_global, parent_id_normalized, timezone, timezone),
+            )
+        elif _has_conversation_rank_global_column(db):
             cursor.execute(
                 """
                 insert into conversation(
@@ -158,18 +269,22 @@ def create_conversation_in_db(db, metadata: Any, timezone: int):
                 """,
                 (conversation_id, json.dumps(metadata_normalized), timezone, timezone),
             )
+    if parent_id_normalized is not None:
+        _append_child_conversation_id_to_parent(db, parent_id_normalized, conversation_id, timezone)
     return get_conversation_by_id(db, conversation_id)
 
 
 def _get_present_conversation_rank_rows(db):
     if not _has_conversation_rank_global_column(db):
         raise RuntimeError("conversation.rankGlobal column is missing. Run script/_3_migrate_add_conversation_rank.py")
+    parent_filter_sql = "and parentId is null" if _has_conversation_parent_id_column(db) else ""
     with closing(dict_cursor(db)) as cursor:
         cursor.execute(
-            """
+            f"""
             select id, rankGlobal, updateAt
             from conversation
             where isInTrashbin = false
+              {parent_filter_sql}
             order by updateAt desc, id desc
             for update
             """
@@ -316,9 +431,10 @@ def register_conversation_routes(app, make_json_response):
             return make_json_response(-1, message="write permission required"), 403
         body = request.get_json(silent=True) or {}
         timezone = _normalize_timezone(body.get("timezone"))
+        parent_id = _normalize_parent_id(body.get("parentId"))
 
         def action(db):
-            return create_conversation_in_db(db, normalize_conversation_metadata_for_create(body.get("metadata")), timezone)
+            return create_conversation_in_db(db, normalize_conversation_metadata_for_create(body.get("metadata")), timezone, parent_id)
 
         try:
             return make_json_response(0, data=run_in_transaction(action))
@@ -348,6 +464,7 @@ def register_conversation_routes(app, make_json_response):
             return make_json_response(-1, message="read permission required"), 403
         body = (request.get_json(silent=True) or {}) if request.method == "POST" else {}
         search_text = _to_text(body.get("searchText") if request.method == "POST" else request.args.get("searchText"))
+        parent_id_filter = _to_text(body.get("parentId") if request.method == "POST" else request.args.get("parentId"))
         try:
             page_index_raw = body.get("pageIndex") if request.method == "POST" else request.args.get("pageIndex")
             page_index = max(1, int(page_index_raw or 1))
@@ -360,12 +477,32 @@ def register_conversation_routes(app, make_json_response):
             page_size = 30
 
         def action(db):
-            where_clause = ""
+            where_part_list = []
             params = []
             if search_text:
-                where_clause = "where metadata::text ilike %s"
+                where_part_list.append("metadata::text ilike %s")
                 params.append(f"%{search_text}%")
-            if _has_conversation_rank_global_column(db):
+            has_parent_id_column = _has_conversation_parent_id_column(db)
+            if has_parent_id_column:
+                if parent_id_filter == "*":
+                    pass
+                elif parent_id_filter:
+                    where_part_list.append("parentId = %s")
+                    params.append(int(parent_id_filter))
+                else:
+                    where_part_list.append("parentId is null")
+            where_clause = f"where {' and '.join(where_part_list)}" if where_part_list else ""
+            if _has_conversation_rank_global_column(db) and has_parent_id_column:
+                order_clause = """
+                    order by
+                      case when parentId is null then 0 else 1 end asc,
+                      isInTrashbin asc,
+                      case when rankGlobal ~ '^[0-9A-Za-z]{12}$' then 0 else 1 end asc,
+                      rankGlobal collate "C" asc nulls last,
+                      updateAt desc,
+                      id desc
+                """
+            elif _has_conversation_rank_global_column(db):
                 order_clause = """
                     order by
                       isInTrashbin asc,
@@ -456,16 +593,28 @@ def register_conversation_routes(app, make_json_response):
             if not _has_conversation_trashbin_column(db):
                 raise RuntimeError("conversation.isInTrashbin column is missing. Run script/migrate_add_conversation_trashbin.py")
             with closing(db.cursor()) as cursor:
-                cursor.execute(
-                    """
-                    update conversation
-                    set isInTrashbin = %s,
-                        updateAt = now(),
-                        updateAtTimezone = %s
-                    where id = %s
-                    """,
-                    (is_in_trashbin, timezone, int(conversation_id)),
-                )
+                if _has_conversation_parent_id_column(db):
+                    cursor.execute(
+                        """
+                        update conversation
+                        set isInTrashbin = %s,
+                            updateAt = now(),
+                            updateAtTimezone = %s
+                        where id = %s or parentId = %s
+                        """,
+                        (is_in_trashbin, timezone, int(conversation_id), int(conversation_id)),
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        update conversation
+                        set isInTrashbin = %s,
+                            updateAt = now(),
+                            updateAtTimezone = %s
+                        where id = %s
+                        """,
+                        (is_in_trashbin, timezone, int(conversation_id)),
+                    )
                 if cursor.rowcount < 1:
                     raise RuntimeError("conversation not found")
             return get_conversation_by_id(db, int(conversation_id))
@@ -517,7 +666,8 @@ def register_conversation_routes(app, make_json_response):
                     raise RuntimeError("conversation not found")
                 metadata_existing = normalize_metadata(row["metadata"])
                 metadata_next = normalize_metadata(body.get("metadata"))
-                metadata_next["evetList"] = metadata_existing["evetList"]
+                metadata_next["eventList"] = metadata_existing["eventList"]
+                metadata_next["childConversationIdList"] = metadata_existing["childConversationIdList"]
                 cursor.execute(
                     """
                     update conversation

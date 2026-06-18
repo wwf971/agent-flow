@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import closing
 from datetime import datetime, timedelta, timezone as datetime_timezone
 from threading import Thread
@@ -22,9 +23,72 @@ if str(DIR_BASE) not in sys.path:
 
 from api_llm import generate_text
 
+BACKEND_TOOL_SUBAGENT = {
+    "name": "tool_subagent",
+    "description": "Launch one or more subagents in parallel. Each subagent receives an initial prompt and must return by calling tool_return_to_parent.",
+    "args": {
+        "subagents": [
+            {
+                "name": "string",
+                "initialPrompt": "string",
+            }
+        ],
+        "maxTurns": "optional integer",
+    },
+    "example_args": {
+        "subagents": [
+            {
+                "name": "math helper",
+                "initialPrompt": "Calculate 12 * 7 and return the result.",
+            },
+            {
+                "name": "hash helper",
+                "initialPrompt": "Calculate the md5 of hello and return it.",
+            },
+        ],
+        "maxTurns": 6,
+    },
+    "outputSchema": {
+        "type": "object",
+        "properties": {
+            "status": {"type": "string"},
+            "subagents": {"type": "array"},
+        },
+    },
+}
+
+
+def get_backend_tool_list():
+    return [dict(BACKEND_TOOL_SUBAGENT)]
+
+
 def run_orchestrator(context: dict[str, Any]):
-    orchestrator = BackendOrchestrator().load(context)
-    yield from orchestrator.iter()
+    state = create_orchestrator_state(context)
+    yield from iter_orchestrator(state)
+
+
+def create_orchestrator_state(context: dict[str, Any]):
+    try:
+        max_turns = int(context.get("maxTurns") or 0)
+    except (TypeError, ValueError):
+        max_turns = 0
+    template_key = _to_text(context.get("templateKey")) or "free-talk"
+    iter_type = _to_text(context.get("iterType")) or "userMessage"
+    return {
+        "metadata": {
+            "templateKey": template_key,
+            "iterType": iter_type,
+        },
+        "templateKey": template_key,
+        "iterType": iter_type,
+        "messageText": _to_text(context.get("messageText")),
+        "conversationId": _to_text(context.get("conversationId")),
+        "eventList": context.get("eventList") if isinstance(context.get("eventList"), list) else [],
+        "logDir": context.get("logDir"),
+        "timezone": _normalize_timezone(context.get("timezone")),
+        "initialPrompt": _to_text(context.get("initialPrompt")),
+        "maxTurns": max_turns,
+    }
 
 def _to_text(value: Any):
     return str(value or "").strip()
@@ -35,6 +99,11 @@ def _normalize_timezone(value: Any):
         return int(value)
     except (TypeError, ValueError):
         return 0
+
+
+def _normalize_parent_id(value: Any):
+    text = _to_text(value)
+    return int(text) if text else None
 
 
 def _build_time_stamp(timezone_value: int):
@@ -77,89 +146,63 @@ def call_agent_text(event_list: list[dict[str, Any]], message_text: str):
     })
 
 
-class BackendOrchestrator:
-    def __init__(self):
-        self.metadata = {}
-        self.metadata_new = {}
-        self.event_list = []
-        self.event_index_last = -1
-        self.template_key = "free-talk"
-        self.iter_type = "userMessage"
-        self.message_text = ""
-        self.conversation_id = ""
-        self.log_dir = None
+def iter_orchestrator(state: dict[str, Any]):
+    if state["iterType"] == "templateStart":
+        yield from iter_template_start(state)
+        return
+    if state["templateKey"] == "free-talk":
+        yield from iter_free_talk_turn(state)
+        return
+    yield from iter_template_turn(state)
 
-    def load(self, context: dict[str, Any]):
-        self.template_key = _to_text(context.get("templateKey")) or "free-talk"
-        self.iter_type = _to_text(context.get("iterType")) or "userMessage"
-        self.message_text = _to_text(context.get("messageText"))
-        self.conversation_id = _to_text(context.get("conversationId"))
-        self.event_list = context.get("eventList") if isinstance(context.get("eventList"), list) else []
-        self.event_index_last = len(self.event_list) - 1
-        self.log_dir = context.get("logDir")
-        self.metadata = {
-            "templateKey": self.template_key,
-            "iterType": self.iter_type,
-        }
-        self.metadata_new = dict(self.metadata)
-        return self
 
-    def initialize(self, template_key: str, conversation_id: str = ""):
-        self.template_key = _to_text(template_key) or "free-talk"
-        self.conversation_id = _to_text(conversation_id)
-        self.iter_type = "templateStart"
-        self.event_list = []
-        self.event_index_last = -1
-        self.metadata = {"templateKey": self.template_key, "iterType": self.iter_type}
-        self.metadata_new = dict(self.metadata)
-        return self
+def build_template_context(state: dict[str, Any], message_text: str, event_list: list[dict[str, Any]]):
+    return {
+        "conversationId": state["conversationId"],
+        "messageText": message_text,
+        "eventList": event_list,
+        "logDir": state["logDir"],
+        "timezone": state["timezone"],
+        "initialPrompt": state["initialPrompt"],
+        "maxTurns": state["maxTurns"],
+        "backendToolList": get_backend_tool_list(),
+        "executeBackendTool": lambda tool_name, args: iter_backend_tool(state, tool_name, args),
+    }
 
-    def iter(self):
-        if self.is_template_start():
-            yield from self.iter_template_start()
-            return
-        if self.is_free_talk():
-            yield from self.iter_free_talk_turn()
-            return
-        yield from self.iter_template_turn()
 
-    def is_template_start(self):
-        return self.iter_type == "templateStart"
+def iter_template_start(state: dict[str, Any]):
+    yield from iter_template_events(
+        state["templateKey"],
+        build_template_context(state, "", []),
+    )
 
-    def is_free_talk(self):
-        return self.template_key == "free-talk"
 
-    def iter_template_start(self):
-        yield from iter_template_events(
-            self.template_key,
-            {
-                "conversationId": self.conversation_id,
-                "messageText": "",
-                "eventList": [],
-                "logDir": self.log_dir,
-            },
-        )
+def iter_free_talk_turn(state: dict[str, Any]):
+    reply_text = call_agent_text(state["eventList"][:-1], state["messageText"])
+    yield {
+        "typeText": "agentMessage",
+        "subtypeText": "textSimple",
+        "contentType": 1,
+        "contentText": reply_text,
+        "metadata": {"templateKey": "free-talk"},
+    }
 
-    def iter_free_talk_turn(self):
-        reply_text = call_agent_text(self.event_list[:-1], self.message_text)
-        yield {
-            "typeText": "agentMessage",
-            "subtypeText": "textSimple",
-            "contentType": 1,
-            "contentText": reply_text,
-            "metadata": {"templateKey": "free-talk"},
-        }
 
-    def iter_template_turn(self):
-        yield from iter_template_events(
-            self.template_key,
-            {
-                "conversationId": self.conversation_id,
-                "messageText": self.message_text,
-                "eventList": self.event_list,
-                "logDir": self.log_dir,
-            },
-        )
+def iter_template_turn(state: dict[str, Any]):
+    yield from iter_template_events(
+        state["templateKey"],
+        build_template_context(state, state["messageText"], state["eventList"]),
+    )
+
+
+def iter_backend_tool(state: dict[str, Any], tool_name: str, args: dict[str, Any]):
+    yield from execute_backend_tool(
+        tool_name,
+        args,
+        int(state["conversationId"]) if state["conversationId"] else 0,
+        state["timezone"],
+        state["templateKey"],
+    )
 
 
 
@@ -282,6 +325,245 @@ def _get_turn_finish_metadata(event_generated_list: list[dict[str, Any]]):
     return {"isUserTurn": True}
 
 
+def _normalize_subagent_request(args: Any):
+    args_data = args if isinstance(args, dict) else {}
+    item_list_raw = args_data.get("subagents") if isinstance(args_data.get("subagents"), list) else []
+    item_list = []
+    for index, item_raw in enumerate(item_list_raw[:4]):
+        item = item_raw if isinstance(item_raw, dict) else {}
+        initial_prompt = _to_text(item.get("initialPrompt"))
+        if not initial_prompt:
+            continue
+        item_list.append({
+            "index": index,
+            "name": _to_text(item.get("name")) or f"subagent {index + 1}",
+            "initialPrompt": initial_prompt,
+        })
+    try:
+        max_turns = max(1, min(12, int(args_data.get("maxTurns") or 6)))
+    except (TypeError, ValueError):
+        max_turns = 6
+    if not item_list:
+        raise RuntimeError("tool_subagent requires at least one subagent with initialPrompt")
+    return item_list, max_turns
+
+
+def _build_subagent_event_content(kind: str, data: dict[str, Any]):
+    return {
+        "metadata": {
+            "schemaVersion": 1,
+            "kind": kind,
+        },
+        "data": [
+            {
+                "type": "json",
+                "data": data,
+            },
+        ],
+    }
+
+
+def _create_subagent_conversation(db, parent_conversation_id: int, item: dict[str, Any], max_turns: int, timezone: int):
+    template = get_template_by_key("subagent-basic")
+    metadata = {
+        "title": item["name"],
+        "statusText": "active",
+        "templateKey": template["key"],
+        "templateName": template["name"],
+        "isUserTurn": False,
+        "subAgentName": item["name"],
+        "subAgentIndex": item["index"],
+        "subAgentMaxTurns": max_turns,
+    }
+    return create_conversation_in_db(db, metadata, timezone, parent_conversation_id)
+
+
+def _extract_latest_tool_call_summary(event_list: list[dict[str, Any]]):
+    for event_item in reversed(event_list):
+        if event_item.get("subtypeText") != "toolCall":
+            continue
+        content_json = event_item.get("contentJson") if isinstance(event_item.get("contentJson"), dict) else {}
+        return {
+            "toolName": str(content_json.get("tool_name") or ""),
+            "args": content_json.get("args") if isinstance(content_json.get("args"), dict) else {},
+        }
+    return None
+
+
+def _extract_subagent_result(event_list: list[dict[str, Any]], conversation_id: int):
+    latest_tool_call = _extract_latest_tool_call_summary(event_list)
+    for event_item in reversed(event_list):
+        if event_item.get("subtypeText") != "subAgentReturn":
+            continue
+        content_json = event_item.get("contentJson") if isinstance(event_item.get("contentJson"), dict) else {}
+        return {
+            "conversationId": str(conversation_id),
+            "statusText": str(content_json.get("statusText") or "completed"),
+            "isReturned": content_json.get("isReturned") is True,
+            "returnValue": content_json.get("returnValue"),
+            "failureReason": str(content_json.get("failureReason") or ""),
+            "turnCount": int(content_json.get("turnCount") or 0),
+            "latestToolCall": latest_tool_call,
+        }
+    return {
+        "conversationId": str(conversation_id),
+        "statusText": "failed",
+        "isReturned": False,
+        "returnValue": None,
+        "failureReason": "subagent did not return a result",
+        "turnCount": 0,
+        "latestToolCall": latest_tool_call,
+    }
+
+
+def _finish_subagent_conversation(db, result: dict[str, Any], timezone: int):
+    status_text = "completed" if result.get("isReturned") is True else "failed"
+    _update_conversation_metadata(
+        db,
+        int(result["conversationId"]),
+        {
+            "statusText": status_text,
+            "isUserTurn": False,
+            "endStatusText": "completed" if status_text == "completed" else "abnormal",
+            "subAgentResult": result,
+        },
+        timezone,
+    )
+    return True
+
+
+def _run_subagent_child(item: dict[str, Any], conversation_id: int, max_turns: int, timezone: int):
+    event_generated_list = []
+    try:
+        event_iter = run_orchestrator({
+            "iterType": "templateStart",
+            "templateKey": "subagent-basic",
+            "conversationId": str(conversation_id),
+            "initialPrompt": item["initialPrompt"],
+            "maxTurns": max_turns,
+            "timezone": timezone,
+            "logDir": None,
+        })
+        for event_item in event_iter:
+            event_generated_list.append(event_item)
+            run_in_transaction(
+                lambda db, event_item_current=event_item: _create_generated_event(
+                    db,
+                    conversation_id,
+                    event_item_current,
+                    timezone,
+                )
+            )
+        result = _extract_subagent_result(event_generated_list, conversation_id)
+        result["name"] = item["name"]
+        result["index"] = item["index"]
+        run_in_transaction(lambda db: _finish_subagent_conversation(db, result, timezone))
+        return result
+    except Exception as error:
+        try:
+            run_in_transaction(lambda db: _create_backend_exception_event(db, conversation_id, error, timezone))
+        except Exception:
+            pass
+        return {
+            "conversationId": str(conversation_id),
+            "name": item["name"],
+            "index": item["index"],
+            "statusText": "failed",
+            "isReturned": False,
+            "returnValue": None,
+            "failureReason": str(error),
+            "turnCount": 0,
+            "latestToolCall": _extract_latest_tool_call_summary(event_generated_list),
+        }
+
+
+def execute_backend_tool(tool_name: str, args: dict[str, Any], parent_conversation_id: int, timezone: int, parent_template_key: str):
+    if tool_name != "tool_subagent":
+        raise RuntimeError(f"Unknown backend tool: {tool_name}")
+    if not parent_conversation_id:
+        raise RuntimeError("tool_subagent requires a parent conversation")
+    item_list, max_turns = _normalize_subagent_request(args)
+    child_list = []
+    for item in item_list:
+        conversation = run_in_transaction(
+            lambda db, item_current=item: _create_subagent_conversation(
+                db,
+                parent_conversation_id,
+                item_current,
+                max_turns,
+                timezone,
+            )
+        )
+        child_list.append({
+            **item,
+            "conversationId": conversation["conversationId"],
+        })
+
+    start_data = {
+        "status": "started",
+        "parentConversationId": str(parent_conversation_id),
+        "maxTurns": max_turns,
+        "subagents": [
+            {
+                "conversationId": child["conversationId"],
+                "name": child["name"],
+                "index": child["index"],
+                "statusText": "running",
+                "turnCount": 0,
+                "latestToolCall": None,
+            }
+            for child in child_list
+        ],
+    }
+    yield {
+        "typeText": "orchestratorMessage",
+        "subtypeText": "subAgentStart",
+        "contentType": 3,
+        "contentText": f"Started {len(child_list)} subagent conversation(s).",
+        "contentJson": _build_subagent_event_content("subAgentStart", start_data),
+        "metadata": {
+            "templateKey": parent_template_key,
+            "toolName": "tool_subagent",
+            "childConversationIdList": [child["conversationId"] for child in child_list],
+        },
+    }
+
+    result_list = []
+    with ThreadPoolExecutor(max_workers=len(child_list)) as executor:
+        future_by_child = {
+            executor.submit(
+                _run_subagent_child,
+                child,
+                int(child["conversationId"]),
+                max_turns,
+                timezone,
+            ): child
+            for child in child_list
+        }
+        for future in as_completed(future_by_child):
+            result_list.append(future.result())
+
+    result_list.sort(key=lambda item: int(item.get("index") or 0))
+    result_data = {
+        "status": "success" if all(item.get("isReturned") is True for item in result_list) else "error",
+        "parentConversationId": str(parent_conversation_id),
+        "subagents": result_list,
+    }
+    yield {
+        "typeText": "orchestratorMessage",
+        "subtypeText": "subAgentResult",
+        "contentType": 3,
+        "contentText": json.dumps(result_data, ensure_ascii=False),
+        "contentJson": _build_subagent_event_content("subAgentResult", result_data),
+        "metadata": {
+            "templateKey": parent_template_key,
+            "toolName": "tool_subagent",
+            "childConversationIdList": [child["conversationId"] for child in child_list],
+        },
+    }
+    return result_data
+
+
 def _is_template_start_background(template_key: str):
     return get_template_by_key(template_key).get("isStartBackground") is True
 
@@ -321,6 +603,7 @@ def _run_template_start_background(template_key: str, conversation_id: int, time
         "templateKey": template_key,
         "conversationId": str(conversation_id),
         "logDir": None,
+        "timezone": timezone,
     })
     _run_template_event_iter_background(event_iter, template_key, conversation_id, timezone)
 
@@ -345,24 +628,32 @@ def _start_template_event_iter_background_thread(event_iter, template_key: str, 
 
 def _run_turn_background(template_key: str, conversation_id: int, message_text: str, event_list: list[dict[str, Any]], timezone: int):
     try:
-        event_generated_list = list(run_orchestrator({
+        event_generated_list = []
+        event_iter = run_orchestrator({
             "iterType": "userMessage",
             "templateKey": template_key,
             "conversationId": str(conversation_id),
             "messageText": message_text,
             "eventList": event_list,
             "logDir": None,
-        }))
+            "timezone": timezone,
+        })
+        for event_item in event_iter:
+            event_generated_list.append(event_item)
+            run_in_transaction(
+                lambda db, event_item_current=event_item: _create_generated_event(
+                    db,
+                    conversation_id,
+                    event_item_current,
+                    timezone,
+                )
+            )
 
-        def create_agent_event_action(db):
-            event_created_list = []
-            for event_item in event_generated_list:
-                event_created = _create_generated_event(db, conversation_id, event_item, timezone)
-                event_created_list.append(event_created)
+        def finish_action(db):
             _update_conversation_metadata(db, conversation_id, _get_turn_finish_metadata(event_generated_list), timezone)
             return True
 
-        run_in_transaction(create_agent_event_action)
+        run_in_transaction(finish_action)
     except Exception as error:
         try:
             run_in_transaction(lambda db: _create_backend_exception_event(db, conversation_id, error, timezone))
@@ -396,6 +687,7 @@ def register_orchestrator_routes(app, make_json_response):
         template_key = _to_text(body.get("templateKey")) or "free-talk"
         template = get_template_by_key(template_key)
         metadata_raw = body.get("metadata") if isinstance(body.get("metadata"), dict) else {}
+        parent_id = _normalize_parent_id(body.get("parentId"))
         metadata_create = template.get("metadataCreate") if isinstance(template.get("metadataCreate"), dict) else {}
         metadata = {
             **metadata_raw,
@@ -407,7 +699,7 @@ def register_orchestrator_routes(app, make_json_response):
         }
 
         def action(db):
-            return create_conversation_in_db(db, metadata, timezone)
+            return create_conversation_in_db(db, metadata, timezone, parent_id)
 
         conversation_id_for_error = 0
         conversation = None
@@ -422,6 +714,7 @@ def register_orchestrator_routes(app, make_json_response):
                     "templateKey": template["key"],
                     "conversationId": str(conversation_id),
                     "logDir": None,
+                    "timezone": timezone,
                 })
                 event_first = next(event_iter, None)
                 if event_first is not None:
@@ -484,6 +777,8 @@ def register_orchestrator_routes(app, make_json_response):
         try:
             def create_user_event_action(db):
                 nonlocal conversation_id_for_error
+                from iteration_scheduler import mark_conversation_user_message_ready
+
                 if conversation_id_text:
                     conversation_id = int(conversation_id_text)
                 else:
@@ -501,7 +796,6 @@ def register_orchestrator_routes(app, make_json_response):
                     conversation = create_conversation_in_db(db, metadata_conversation, timezone)
                     conversation_id = int(conversation["conversationId"])
                 conversation_id_for_error = conversation_id
-                _update_conversation_metadata(db, conversation_id, {"isUserTurn": False}, timezone)
                 event_user = create_event_in_db(
                     db,
                     conversation_id,
@@ -513,6 +807,7 @@ def register_orchestrator_routes(app, make_json_response):
                     body.get("metadata"),
                     timezone,
                 )
+                mark_conversation_user_message_ready(db, conversation_id, timezone)
                 event_list = list_events_by_conversation(db, conversation_id)
                 return {
                     "conversationId": str(conversation_id),
@@ -522,8 +817,6 @@ def register_orchestrator_routes(app, make_json_response):
 
             user_result = run_in_transaction(create_user_event_action)
             conversation_id = int(user_result["conversationId"])
-            template_key = run_in_transaction(lambda db: _get_template_key_from_conversation(db, conversation_id))
-            _start_turn_background_thread(template_key, conversation_id, message_text, user_result["eventList"], timezone)
             return make_json_response(
                 0,
                 data={
@@ -531,6 +824,7 @@ def register_orchestrator_routes(app, make_json_response):
                     "eventUser": user_result["eventUser"],
                     "eventGeneratedList": [],
                     "eventAgent": None,
+                    "isScheduled": True,
                 },
             )
         except Exception as error:

@@ -22,6 +22,15 @@ const MessagePending = observer(({ data }: MessagePendingProps) => {
         </div>
         <div className="conversation-message-pending-body">
           <SpinningCircle width={14} height={14} />
+          {data.detailLineList?.length ? (
+            <div className="conversation-message-pending-detail-list">
+              {data.detailLineList.map((lineText) => (
+                <div className="conversation-message-pending-detail" key={lineText}>
+                  {lineText}
+                </div>
+              ))}
+            </div>
+          ) : null}
         </div>
       </div>
     </div>

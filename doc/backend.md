@@ -2,17 +2,18 @@
 
 ## Goal
 
-The backend should first manage conversations and ordered events. Agent orchestration should sit on top of that storage model, instead of mixing long terminal logs with model calls.
+The backend manages conversations and ordered events. Agent orchestration sits on top of that storage model, instead of mixing long terminal logs with model calls.
 
-The first useful backend can stay small:
+The backend stays small:
 
 - PostgreSQL storage for `conversation` and `event`
 - Flask HTTP API following `code/data/message`
 - small login/token authorization layer with `R` and `W` permissions
-- one orchestrator endpoint for pure text conversation
+- template creation and user-turn endpoints backed by `backend/iteration_executor.py`
+- task-driven conversation iteration backed by `backend/iteration_scheduler.py`
 - content type mapping loaded from YAML config
 
-Database details are in `doc/database.md`. Endpoint details are in `doc/api.md`.
+Database details are in `doc/database.md`. Endpoint details are in `doc/api.md`. Orchestration concepts and templates are in `doc/orchesatrator.md`.
 
 ## Runtime Shape
 
@@ -26,11 +27,11 @@ frontend or script
   -> PostgreSQL
 ```
 
-For the first version, model/tool adapters can reuse current experiment code from `test/_0_web_fetch_local/test.py` and `test/_1_mcp/test.py` only where it helps. External model calls should go through `api_llm`, and the persisted event model should be the stable boundary.
+External model calls go through `api_llm`, and the persisted event model is the stable boundary. Template orchestrators can reuse experiment code under `test/`.
 
 ## Backend Modules
 
-Suggested files:
+Main files:
 
 ```text
 backend/app.py
@@ -40,10 +41,12 @@ backend/login.py
 backend/id_service.py
 backend/conversation.py
 backend/event.py
-backend/orchestrator.py
+backend/iteration_executor.py
+backend/iteration_scheduler.py
 database/init_table.sql
 config/conversation_content_type.yaml
-script/reinit_database.py
+config/templates.py
+script/_1_reinit_database.py
 ```
 
 Responsibilities:
@@ -57,28 +60,35 @@ Responsibilities:
 | `id_service.py` | `ms_48` ID allocation |
 | `conversation.py` | conversation endpoints and service logic |
 | `event.py` | event endpoints and service logic |
-| `orchestrator.py` | text turn creation and model call flow |
+| `iteration_executor.py` | orchestrator entry point, template creation, turn creation route, and backend tools |
+| `iteration_scheduler.py` | task scheduler, worker runtime, leases, retry, and iteration commits |
+| `config/templates.py` | template metadata and module paths |
 
 ## Orchestrator Flow
 
+The durable storage boundary is the conversation event list. The user-message route accepts input quickly, marks the conversation as needing iteration, and returns before generated events exist.
+
 For `POST /api/orchestrator/turn/create`:
 
-1. Validate request.
+1. Validate request and conversation state.
 2. Create conversation when `conversationId` is absent.
 3. Append `userMessage/textSimple` event.
-4. Read conversation IDs from `conversation.metadata.evetList`.
-5. Build model context from supported text events.
-6. Call model.
-7. Append `agentMessage/textSimple` event.
-8. Return the new conversation ID and event IDs.
+4. Set `isUserTurn = false`, `stateCode = USER_MESSAGE_READY`, and `execStatusCode = PENDING`.
+5. Notify `conversation_task_ready`.
+6. Return the accepted user event immediately with `isScheduled = true`.
+7. A worker leases the conversation, runs one orchestrator iteration, appends generated events, and commits the next state.
 
-If the model call fails after the user event has been written, append an `orchestratorMessage/textSimple` event describing the failure and return a negative `code`.
+For `POST /api/conversation/create/from-template`, the backend creates the conversation and may start a `templateStart` iteration. Templates marked `isStartBackground` still use the older background-thread startup path.
 
-Each event append must insert the event row and update `conversation.metadata.evetList` in one transaction.
+If orchestration fails after a conversation exists, append `EndAbnormal/BackendException`, set `statusText = failed`, set `isUserTurn = false`, and record `endStatusText = abnormal`.
 
-## Future Event Types
+Each event append must insert the event row and update `conversation.metadata.eventList` in one transaction.
 
-The storage model should later support more event values without adding new tables:
+Orchestration concepts are in `doc/orchesatrator.md`. Task scheduler and worker details are in `doc/conversation-iter-task.md`.
+
+## Event Types
+
+The storage model supports multiple event values without adding new tables:
 
 | typeText | subtypeText | Notes |
 |----------|-------------|-------|
@@ -86,16 +96,15 @@ The storage model should later support more event values without adding new tabl
 | `orchestratorMessage` | `toolResult` | tool result sent back to agent |
 | `userMessage` | `textWithFile` | user text with file reference metadata |
 | `userMessage` | `textWithImage` | user text with image reference metadata |
-| `orchestratorMessage` | `subAgentStart` | sub-agent created |
-| `orchestratorMessage` | `subAgentResult` | sub-agent result received |
-
-Those are not first-version requirements. The first version should only implement `textSimple`.
+| `orchestratorMessage` | `subAgentStart` | subagent created |
+| `orchestratorMessage` | `subAgentResult` | subagent result received |
+| `orchestratorMessage` | `subAgentReturn` | child conversation returned to parent |
 
 For `orchestratorMessage/toolResult`, the backend should keep `contentText` as the exact text that was sent back into the model context. `contentJson` may store a structured segment envelope for frontend display. This lets the UI abbreviate long fields such as fetched web page text without changing the agent-facing message.
 
 ## Frontend Direction
 
-When UI is added, React state should be store-driven:
+React state should be store-driven:
 
 - store owns conversation list, current conversation, events, and request state
 - render components receive data and send change attempts through store methods

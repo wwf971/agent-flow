@@ -10,8 +10,9 @@ from config import DEFAULT_PORT, get_dir_base, load_content_type_config
 from conversation import register_conversation_routes
 from db import database_config, ensure_database_exists, ensure_schema_exists, reinit_database
 from event import register_event_routes
+from iteration_executor import register_orchestrator_routes
+from iteration_scheduler import ensure_conversation_iter_schema, start_conversation_iter_runtime
 from login import has_request_permission, is_request_authorized, register_login_routes
-from orchestrator import register_orchestrator_routes
 from update_ws import register_update_ws_routes
 
 
@@ -156,6 +157,8 @@ def bootstrap_app():
     try:
         ensure_database_exists()
         ensure_schema_exists()
+        ensure_conversation_iter_schema()
+        start_conversation_iter_runtime()
         is_database_bootstrap_ok = True
         database_bootstrap_error_text = ""
     except Exception as error:

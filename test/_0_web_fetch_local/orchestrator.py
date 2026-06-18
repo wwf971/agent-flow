@@ -24,50 +24,41 @@ def _to_dialogue(event_list):
   return dialogue
 
 
-class WebFetchLocalOrchestrator:
-  def __init__(self):
-    self.metadata = {"templateKey": TEMPLATE_INFO["key"]}
-    self.event_list = []
-    self.event_index_last = -1
-    self.message_text = ""
-    self.log_dir = None
+def create_orchestrator_state(context):
+  event_list = context.get("eventList") if isinstance(context.get("eventList"), list) else []
+  return {
+    "metadata": {"templateKey": TEMPLATE_INFO["key"]},
+    "eventList": event_list,
+    "eventIndexLast": len(event_list) - 1,
+    "messageText": str(context.get("messageText") or ""),
+    "logDir": context.get("logDir"),
+  }
 
-  def load(self, context):
-    self.event_list = context.get("eventList") or []
-    self.event_index_last = len(self.event_list) - 1
-    self.message_text = str(context.get("messageText") or "")
-    self.log_dir = context.get("logDir")
-    return self
 
-  def initialize(self):
-    self.metadata = {"templateKey": TEMPLATE_INFO["key"]}
-    self.event_list = []
-    self.event_index_last = -1
-    return self
+def build_agent_event(state, reply_text, debug_info):
+  return {
+    "typeText": "agentMessage",
+    "subtypeText": "textSimple",
+    "contentType": 1,
+    "contentText": reply_text,
+    "metadata": {
+      "templateKey": state["metadata"]["templateKey"],
+      "debugInfo": debug_info,
+    },
+  }
 
-  def iter(self):
-    dialogue = _to_dialogue(self.event_list)
-    _turn_new, debug_info = generate_new_turn_with_live_fetch(
-      dialogue,
-      self.message_text,
-      is_return_debug=True,
-      log_dir=self.log_dir,
-    )
-    yield self.build_agent_event(_turn_new[1], debug_info)
 
-  def build_agent_event(self, reply_text, debug_info):
-    return {
-      "typeText": "agentMessage",
-      "subtypeText": "textSimple",
-      "contentType": 1,
-      "contentText": reply_text,
-      "metadata": {
-        "templateKey": self.metadata["templateKey"],
-        "debugInfo": debug_info,
-      },
-    }
+def iter_orchestrator(state):
+  dialogue = _to_dialogue(state["eventList"])
+  turn_new, debug_info = generate_new_turn_with_live_fetch(
+    dialogue,
+    state["messageText"],
+    is_return_debug=True,
+    log_dir=state["logDir"],
+  )
+  yield build_agent_event(state, turn_new[1], debug_info)
 
 
 def orchestrator_iter(context):
-  orchestrator = WebFetchLocalOrchestrator().load(context)
-  yield from orchestrator.iter()
+  state = create_orchestrator_state(context)
+  yield from iter_orchestrator(state)

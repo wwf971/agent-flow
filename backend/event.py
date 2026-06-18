@@ -100,9 +100,9 @@ def create_event_in_db(
 
     with closing(dict_cursor(db)) as cursor:
         metadata_conversation = _load_conversation_metadata_for_update(cursor, conversation_id)
-        evet_list = metadata_conversation["evetList"]
-        evet_list.append(event_id_text)
-        metadata_conversation["evetList"] = evet_list
+        event_list = metadata_conversation["eventList"]
+        event_list.append(event_id_text)
+        metadata_conversation["eventList"] = event_list
         cursor.execute(
             """
             insert into event(
@@ -185,8 +185,8 @@ def list_events_by_conversation(db, conversation_id: int):
         conversation_row = cursor.fetchone()
         if not conversation_row:
             raise RuntimeError("conversation not found")
-        evet_list = normalize_metadata(conversation_row["metadata"])["evetList"]
-        event_id_list = [int(item) for item in evet_list if _to_text(item)]
+        event_list = normalize_metadata(conversation_row["metadata"])["eventList"]
+        event_id_list = [int(item) for item in event_list if _to_text(item)]
         if not event_id_list:
             return []
         cursor.execute(
@@ -201,7 +201,7 @@ def list_events_by_conversation(db, conversation_id: int):
         )
         row_list = cursor.fetchall() or []
     event_by_id = {str(row["id"]): row_to_event(row) for row in row_list}
-    return [event_by_id[event_id_text] for event_id_text in evet_list if event_id_text in event_by_id]
+    return [event_by_id[event_id_text] for event_id_text in event_list if event_id_text in event_by_id]
 
 
 def register_event_routes(app, make_json_response):
@@ -357,8 +357,8 @@ def register_event_routes(app, make_json_response):
                     raise RuntimeError("event not found")
                 conversation_id = int(event_row["conversationid"])
                 metadata_conversation = _load_conversation_metadata_for_update(cursor, conversation_id)
-                metadata_conversation["evetList"] = [
-                    item for item in metadata_conversation["evetList"] if str(item) != event_id
+                metadata_conversation["eventList"] = [
+                    item for item in metadata_conversation["eventList"] if str(item) != event_id
                 ]
                 cursor.execute("delete from event where id = %s", (int(event_id),))
                 cursor.execute(

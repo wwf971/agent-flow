@@ -157,36 +157,57 @@ def build_tool_call_json(tool_name, args):
   }, ensure_ascii=False, indent=2)
 
 
-def get_tools_description(is_include_termination=False):
-  lines = []
+def create_tool_status():
+  return {
+    "toolCalledList": [],
+    "toolRemainingList": [tool["name"] for tool in TOOLS_LIST],
+  }
+
+
+def _resolve_tool_status(tool_status=None):
+  if isinstance(tool_status, dict):
+    tool_status.setdefault("toolCalledList", [])
+    tool_status.setdefault("toolRemainingList", [tool["name"] for tool in TOOLS_LIST])
+    return tool_status
+  return {
+    "toolCalledList": TOOLS_CALLED,
+    "toolRemainingList": TOOLS_REMAINING,
+  }
+
+
+def get_tool_list(is_include_termination=False, tool_list_extra=None):
   tools = list(TOOLS_LIST)
+  if isinstance(tool_list_extra, list):
+    tools.extend(tool for tool in tool_list_extra if isinstance(tool, dict))
   if is_include_termination:
     tools.append(TOOL_TERMINATE_CONVERSATION)
+  return tools
+
+
+def get_tools_description(is_include_termination=False, tool_list_extra=None):
+  lines = []
+  tools = get_tool_list(is_include_termination=is_include_termination, tool_list_extra=tool_list_extra)
   for tool in tools:
     args_text = json.dumps(tool["args"])
     lines.append(f"- {tool['name']}: {tool['description']} args={args_text}")
   return "\n".join(lines)
 
 
-def get_tool_call_examples(is_include_termination=False):
-  tools = list(TOOLS_LIST)
-  if is_include_termination:
-    tools.append(TOOL_TERMINATE_CONVERSATION)
+def get_tool_call_examples(is_include_termination=False, tool_list_extra=None):
+  tools = get_tool_list(is_include_termination=is_include_termination, tool_list_extra=tool_list_extra)
   return "\n\n".join(build_tool_call_json(tool["name"], tool["example_args"]) for tool in tools)
 
 
-def get_tool_definition(tool_name, is_include_termination=False):
-  tools = list(TOOLS_LIST)
-  if is_include_termination:
-    tools.append(TOOL_TERMINATE_CONVERSATION)
+def get_tool_definition(tool_name, is_include_termination=False, tool_list_extra=None):
+  tools = get_tool_list(is_include_termination=is_include_termination, tool_list_extra=tool_list_extra)
   for tool in tools:
     if tool["name"] == tool_name:
       return tool
   return None
 
 
-def build_tool_result_structured_content(tool_name, result, reply_text=None, is_include_termination=False):
-  tool_definition = get_tool_definition(tool_name, is_include_termination=is_include_termination) or {}
+def build_tool_result_structured_content(tool_name, result, reply_text=None, is_include_termination=False, tool_list_extra=None):
+  tool_definition = get_tool_definition(tool_name, is_include_termination=is_include_termination, tool_list_extra=tool_list_extra) or {}
   result_text = json.dumps(result, ensure_ascii=False)
   text_prefix = "Tool result: "
   text_suffix = ""
@@ -219,52 +240,57 @@ def build_tool_result_structured_content(tool_name, result, reply_text=None, is_
   }
 
 
-def build_tool_result_segment(tool_name, result, is_include_termination=False):
+def build_tool_result_segment(tool_name, result, is_include_termination=False, tool_list_extra=None):
   return build_tool_result_structured_content(
     tool_name,
     result,
     is_include_termination=is_include_termination,
+    tool_list_extra=tool_list_extra,
   )
 
 
-def get_tools_called():
-  return list(TOOLS_CALLED)
+def get_tools_called(tool_status=None):
+  status = _resolve_tool_status(tool_status)
+  return list(status["toolCalledList"])
 
 
-def get_tools_remaining():
-  return [tool["name"] for tool in TOOLS_LIST if tool["name"] not in TOOLS_CALLED]
+def get_tools_remaining(tool_status=None):
+  called_list = get_tools_called(tool_status)
+  return [tool["name"] for tool in TOOLS_LIST if tool["name"] not in called_list]
 
 
-def reset_tool_status():
-  TOOLS_CALLED.clear()
-  TOOLS_REMAINING[:] = [tool["name"] for tool in TOOLS_LIST]
+def reset_tool_status(tool_status=None):
+  status = _resolve_tool_status(tool_status)
+  status["toolCalledList"].clear()
+  status["toolRemainingList"][:] = [tool["name"] for tool in TOOLS_LIST]
 
 
-def remember_tool_called(tool_name):
-  if tool_name not in TOOLS_CALLED:
-    TOOLS_CALLED.append(tool_name)
-  TOOLS_REMAINING[:] = get_tools_remaining()
+def remember_tool_called(tool_name, tool_status=None):
+  status = _resolve_tool_status(tool_status)
+  if tool_name in [tool["name"] for tool in TOOLS_LIST] and tool_name not in status["toolCalledList"]:
+    status["toolCalledList"].append(tool_name)
+  status["toolRemainingList"][:] = get_tools_remaining(status)
 
 
-def compose_retry_reply(reason):
-  remaining = ", ".join(get_tools_remaining())
+def compose_retry_reply(reason, tool_status=None):
+  remaining = ", ".join(get_tools_remaining(tool_status))
   return (
     f"{reason}\n"
     f"{REPLY_WRONG_TOOL_CALL_FORMAT}\n"
-    f"Tools already completed: {', '.join(get_tools_called()) or 'none'}.\n"
+    f"Tools already completed: {', '.join(get_tools_called(tool_status)) or 'none'}.\n"
     f"Please try one remaining tool: {remaining}."
   )
 
 
-def compose_continue_reply(tool_name, result):
-  remember_tool_called(tool_name)
-  remaining = get_tools_remaining()
+def compose_continue_reply(tool_name, result, tool_status=None):
+  remember_tool_called(tool_name, tool_status)
+  remaining = get_tools_remaining(tool_status)
   result_text = json.dumps(result, ensure_ascii=False)
   if not remaining:
     return f"Tool result: {result_text}\nAll tools have been completed. Reply with a short natural language summary."
   return (
     f"Tool result: {result_text}\n"
-    f"Tools already completed: {', '.join(get_tools_called())}.\n"
+    f"Tools already completed: {', '.join(get_tools_called(tool_status))}.\n"
     f"Please try one remaining tool using the required JSON format: {', '.join(remaining)}."
   )
 
@@ -334,7 +360,7 @@ def execute_tool_call(tool_name, args):
   raise ValueError(f"Unknown tool: {tool_name}")
 
 
-def parse_tool_call(reply_text, is_allow_repeated_tool=False, is_allow_termination=False):
+def parse_tool_call(reply_text, is_allow_repeated_tool=False, is_allow_termination=False, tool_list_extra=None, tool_status=None):
   try:
     data = json.loads(reply_text)
   except json.JSONDecodeError as e:
@@ -346,12 +372,10 @@ def parse_tool_call(reply_text, is_allow_repeated_tool=False, is_allow_terminati
     return None, "The action field must be tool_call."
 
   tool_name = data.get("tool_name")
-  tool_names = [tool["name"] for tool in TOOLS_LIST]
-  if is_allow_termination:
-    tool_names.append(TOOL_TERMINATE_CONVERSATION["name"])
+  tool_names = [tool["name"] for tool in get_tool_list(is_include_termination=is_allow_termination, tool_list_extra=tool_list_extra)]
   if tool_name not in tool_names:
     return None, f"Unknown tool_name: {tool_name}"
-  if not is_allow_repeated_tool and tool_name in TOOLS_CALLED:
+  if not is_allow_repeated_tool and tool_name in get_tools_called(tool_status):
     return None, f"The tool {tool_name} was already completed. Choose a remaining tool."
 
   args = data.get("args")
@@ -363,7 +387,7 @@ def parse_tool_call(reply_text, is_allow_repeated_tool=False, is_allow_terminati
   }, ""
 
 
-def build_initial_prompt(is_encourage_invalid_tool=False):
+def build_initial_prompt(is_encourage_invalid_tool=False, tool_list_extra=None):
   invalid_tool_text = ""
   if is_encourage_invalid_tool:
     invalid_tool_text = """
@@ -380,7 +404,7 @@ Your goal is to try every available tool exactly once.
 {invalid_tool_text}
 
 Available tools:
-{get_tools_description()}
+{get_tools_description(tool_list_extra=tool_list_extra)}
 
 You must visit this site by using tool_web_fetch:
 {SITE_EXAMPLE}
@@ -399,7 +423,7 @@ Required tool call format:
 }}
 
 Examples:
-{get_tool_call_examples()}
+{get_tool_call_examples(tool_list_extra=tool_list_extra)}
 
 After each valid tool call, the orchestrator will return the tool result and tell you which tools remain.
 If your tool call JSON is invalid, the orchestrator will guide you to try again.
@@ -407,7 +431,7 @@ Start now by calling one tool.
 """.strip()
 
 
-def build_interactive_prompt():
+def build_interactive_prompt(tool_list_extra=None):
   return f"""
 You are an assistant inside an interactive tool-calling experiment.
 
@@ -415,7 +439,7 @@ You can reply in natural language when no tool is needed.
 When a tool is useful, reply with only standard JSON in the required tool call format.
 
 Available tools:
-{get_tools_description(is_include_termination=True)}
+{get_tools_description(is_include_termination=True, tool_list_extra=tool_list_extra)}
 
 Required tool call format:
 {{
@@ -427,7 +451,7 @@ Required tool call format:
 }}
 
 Examples:
-{get_tool_call_examples(is_include_termination=True)}
+{get_tool_call_examples(is_include_termination=True, tool_list_extra=tool_list_extra)}
 
 If the user says bye, goodbye, see you, or expresses similar meaning, call tool_terminate_conversation.
 Do not terminate by yourself unless the user clearly wants to end the conversation.

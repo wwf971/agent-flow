@@ -90,5 +90,19 @@
 .conversation-message-pending-body {
   display: flex;
   align-items: center;
+  gap: 5px;
   min-height: 18px;
+}
+
+.conversation-message-pending-detail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: #9aa3b2;
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.conversation-message-pending-detail {
+  white-space: pre-wrap;
 }

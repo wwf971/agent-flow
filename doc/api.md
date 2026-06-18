@@ -40,9 +40,13 @@ IDs are passed through query params for `GET` and request body for `POST`, not p
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `POST` | `/api/conversation/create` | create one conversation |
+| `POST` | `/api/conversation/create/from-template` | create one conversation from template metadata |
 | `GET` | `/api/conversation/get` | get one conversation metadata row |
-| `GET` | `/api/conversation/list` | list conversations |
+| `GET/POST` | `/api/conversation/list` | list conversations |
 | `POST` | `/api/conversation/metadata/update` | update metadata only |
+| `POST` | `/api/conversation/rename` | update conversation title |
+| `POST` | `/api/conversation/trashbin/update` | move conversation and child conversations into or out of trashbin |
+| `POST` | `/api/conversation/reorder` | reorder top-level conversations |
 | `POST` | `/api/conversation/delete` | delete one conversation and its events |
 
 ### `POST /api/conversation/create`
@@ -67,7 +71,7 @@ Response:
   "data": {
     "conversationId": "115321661721788416",
     "metadata": {
-      "evetList": [],
+      "eventList": [],
       "title": "Tokyo train delay check",
       "tagList": ["experiment"]
     }
@@ -89,7 +93,7 @@ Response data:
 {
   "conversationId": "115321661721788416",
   "metadata": {
-    "evetList": []
+    "eventList": []
   },
   "createAt": "2026-06-02T00:45:00.000+09:00",
   "createAtTimezone": 540,
@@ -106,6 +110,8 @@ Query:
 pageIndex=1&pageSize=30&searchText=train
 ```
 
+Use `parentId` to list child conversations. Omit it to list top-level conversations. Use `parentId=*` to include both top-level and child conversations.
+
 Response data:
 
 ```json
@@ -117,7 +123,7 @@ Response data:
     {
       "conversationId": "115321661721788416",
       "metadata": {
-        "evetList": ["115321665654145024"],
+        "eventList": ["115321665654145024"],
         "title": "Tokyo train delay check"
       },
       "createAt": "2026-06-02T00:45:00.000+09:00",
@@ -129,7 +135,7 @@ Response data:
 }
 ```
 
-List should order by `updateAt desc, conversationId desc`.
+Top-level conversations use `rankGlobal` when available, then `updateAt desc, conversationId desc`. Child conversations are listed by `parentId`.
 
 ### `POST /api/conversation/metadata/update`
 
@@ -146,9 +152,9 @@ Request:
 }
 ```
 
-This replaces the whole metadata object. Partial metadata updates can be added later if needed.
+This replaces the whole metadata object. Add a partial update endpoint only when partial metadata writes are needed.
 
-Backend should preserve or normalize `metadata.evetList`; clients should not use this endpoint to reorder events in the first version.
+Backend should preserve or normalize `metadata.eventList`; clients should not use this endpoint to reorder events.
 
 ### `POST /api/conversation/delete`
 
@@ -160,14 +166,14 @@ Request:
 }
 ```
 
-The first version can physically delete conversation and events. If archived conversations become important, use metadata `statusText = archived` instead of this endpoint.
+This endpoint physically deletes a conversation and its events. If archived conversations become important, use metadata `statusText = archived` instead of this endpoint.
 
 ## Event Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `POST` | `/api/event/create` | append one event |
-| `GET` | `/api/event/list` | list events in one conversation |
+| `GET/POST` | `/api/event/list` | list events in one conversation |
 | `GET` | `/api/event/get` | get one event |
 | `POST` | `/api/event/update` | update event content and metadata |
 | `POST` | `/api/event/delete` | delete one event |
@@ -208,7 +214,7 @@ Backend assigns:
 - `id`
 - time fields
 
-The first version only appends at the end of a conversation. The backend inserts the event row and appends the event ID to `conversation.metadata.evetList` inside one transaction.
+The backend appends at the end of a conversation. It inserts the event row and appends the event ID to `conversation.metadata.eventList` inside one transaction.
 
 ### `GET /api/event/list`
 
@@ -241,7 +247,7 @@ Response data:
 }
 ```
 
-Events should be ordered by `conversation.metadata.evetList`.
+Events should be ordered by `conversation.metadata.eventList`.
 
 ### `POST /api/event/update`
 
@@ -258,17 +264,19 @@ Request:
 }
 ```
 
-This endpoint is optional for first implementation. It is useful for manually repairing experiment logs.
+This endpoint is useful for manually repairing experiment logs.
 
 ## Orchestrator Endpoint
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/api/orchestrator/turn/create` | add user event, call agent, store generated events |
+| `GET/POST` | `/api/template/list` | list user-visible templates |
+| `POST` | `/api/conversation/create/from-template` | create a template conversation and optionally start it |
+| `POST` | `/api/orchestrator/turn/create` | accept a user event and schedule orchestration |
 
 ### `POST /api/orchestrator/turn/create`
 
-This is the main endpoint for pure text conversation.
+This is the main endpoint for user-entered turns. It accepts the user event synchronously and marks the conversation as ready for worker iteration.
 
 Request:
 
@@ -295,17 +303,15 @@ Response data:
     "contentType": 1,
     "contentText": "What came after the Tang dynasty?"
   },
-  "eventAgent": {
-    "id": "115321666178433024",
-    "typeText": "agentMessage",
-    "subtypeText": "textSimple",
-    "contentType": 1,
-    "contentText": "After Tang came the Five Dynasties and Ten Kingdoms period, followed by the Song dynasty."
-  }
+  "eventGeneratedList": [],
+  "eventAgent": null,
+  "isScheduled": true
 }
 ```
 
-For first implementation, this endpoint can rebuild model context by reading event IDs from `conversation.metadata.evetList` and selecting text events.
+Generated events are appended later by the task worker. The frontend should refresh from `/api/event/list` after conversation update notifications or during quiet polling.
+
+For `free-talk`, the backend rebuilds model context by reading event IDs from `conversation.metadata.eventList` and selecting text events.
 
 Context conversion:
 
@@ -313,9 +319,9 @@ Context conversion:
 |-------|------------|
 | `userMessage` + `textSimple` | `user` |
 | `agentMessage` + `textSimple` | `assistant` |
-| `orchestratorMessage` + `textSimple` | `user` or system-like instruction, depending on experiment |
+| `orchestratorMessage` + `textSimple` | `user`-like instruction text in the current prompt builder |
 
-Tool and sub-agent events should not be added to model context until the later orchestrator logic explicitly supports them.
+Tool and subagent events should be added to model context only by orchestrator logic that explicitly supports them.
 
 For events with `contentType = 3`, `contentText` is the raw text form and `contentJson` is the structured form. Tool results should keep the exact agent-facing message in `contentText` and may use a segment envelope in `contentJson`:
 
@@ -376,6 +382,11 @@ Response data:
       "contentType": 2,
       "name": "json",
       "activeColumn": "contentJson"
+    },
+    {
+      "contentType": 3,
+      "name": "textWithJson",
+      "activeColumn": "contentTextAndContentJson"
     }
   ]
 }
@@ -423,12 +434,13 @@ Initial code values:
 | `-1` | generic failure |
 | `-10` | invalid request |
 | `-20` | not found |
-| `-30` | model call failed |
+| `-30` | orchestration failed after a conversation may already exist |
 | `-40` | content type is not supported |
 
 ## Transaction Rules
 
 - Conversation create and event create run in transactions.
-- `/api/orchestrator/turn/create` should create the user event, call the model, then store the agent event.
-- If model call fails after user event is stored, store an `orchestratorMessage` event with failure metadata and return `code < 0`.
+- `/api/orchestrator/turn/create` creates the user event, marks the conversation pending, and returns before generated events are finished.
+- Worker orchestration stores generated events in later transactions.
+- If orchestration fails after a conversation exists, store `EndAbnormal / BackendException` and mark the conversation failed.
 - Parent conversation `updateAt` should be updated whenever an event changes.
