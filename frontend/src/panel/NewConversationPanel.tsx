@@ -35,11 +35,14 @@ const NewConversationPanel = observer(() => {
               keyValues: [{ key: 'templateKey', value: template.key }],
             }}
             config={{
-              actionItems: [{ id: 'create', labelText: 'Create from Template' }],
+              actionItems: [{
+                id: 'create',
+                labelText: template.key === 'subagent-test' ? 'Create and Run' : 'Create from Template',
+              }],
             }}
             onEvent={(eventType, eventData) => {
               if (eventType === 'action' && eventData.actionId === 'create') {
-                appStore.createConversationFromTemplate(template.key)
+                appStore.createConversationFromTemplateDefault(template.key)
               }
             }}
           />

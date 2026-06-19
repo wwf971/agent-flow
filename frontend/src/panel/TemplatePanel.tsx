@@ -29,7 +29,7 @@ const TemplatePanel = observer(() => {
         }}
         onEvent={(eventType, eventData) => {
           if (eventType === 'action' && eventData.actionId === 'create') {
-            appStore.createConversationFromTemplate(template.key)
+            appStore.createConversationFromTemplateDefault(template.key)
           }
         }}
       />

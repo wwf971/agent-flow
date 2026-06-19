@@ -65,6 +65,22 @@ TEMPLATE_LIST = [
         },
     },
     {
+        "key": "subagent-test",
+        "name": "Subagent Test",
+        "description": "Launches one child subagent that returns a short text answer to the parent.",
+        "modulePath": "test/_2_sub_agent/orchestrator_parent.py",
+        "isStartBackground": False,
+        "isUserMessageAccepted": True,
+        "metadataCreate": {
+            "statusText": "active",
+            "isUserTurn": True,
+        },
+        "metadataStartFinish": {
+            "statusText": "active",
+            "isUserTurn": True,
+        },
+    },
+    {
         "key": "subagent-basic",
         "name": "Subagent Basic",
         "description": "Internal subagent template for backend subagent tool calls.",

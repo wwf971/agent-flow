@@ -25,6 +25,7 @@ const ConversationPanel = observer(() => {
   const metadata = conversation.metadata || {}
   const statusText = String(metadata.statusText || 'active')
   const isInputEnabled = appStore.isConversationInputEnabled
+  const isDeleteEnabled = !conversation.parentId
   const messageConversationNoticeText = appStore.getMessageConversationNoticeText(conversation.conversationId)
   const inputPlaceholder = resolveInputPlaceholder(statusText, String(metadata.templateKey || 'free-talk'))
   const ButtonWithDropDownComp = ButtonWithDropDown as any
@@ -32,7 +33,11 @@ const ConversationPanel = observer(() => {
   return (
     <div className="conversation-root">
       <div className="conversation-header">
-        <ConversationTitle conversationId={conversation.conversationId} titleText={String(metadata.title || metadata.templateName || 'Conversation')} />
+        <ConversationTitle
+          conversationId={conversation.conversationId}
+          titleText={String(metadata.title || metadata.templateName || 'Conversation')}
+          isRenameEnabled={!conversation.parentId}
+        />
         <div className="conversation-meta">
           <span className="conversation-tag">{String(metadata.templateName || metadata.templateKey || 'free-talk')}</span>
           <span className="conversation-tag">{statusText}</span>
@@ -46,35 +51,37 @@ const ConversationPanel = observer(() => {
           >
             Refresh
           </button>
-          <ButtonWithDropDownComp
-            data={{
-              label: 'Delete',
-              items: [
-                {
-                  id: 'delete-permanently',
-                  label: 'Delete Permanently',
-                },
-                {
-                  id: 'delete-to-trashbin',
-                  label: 'Delete to Trashbin',
-                  isDisabled: conversation.isInTrashbin === true,
-                },
-              ],
-            }}
-            config={{
-              className: 'conversation-delete-dropdown',
-              minWidth: 150,
-            }}
-            onEvent={(eventType: string, eventData: any) => {
-              if (eventType !== 'itemClick') return
-              if (eventData?.itemId === 'delete-permanently') {
-                appStore.deleteConversation(conversation.conversationId)
-              }
-              if (eventData?.itemId === 'delete-to-trashbin') {
-                appStore.moveConversationToTrashbin(conversation.conversationId)
-              }
-            }}
-          />
+          {isDeleteEnabled ? (
+            <ButtonWithDropDownComp
+              data={{
+                label: 'Delete',
+                items: [
+                  {
+                    id: 'delete-permanently',
+                    label: 'Delete Permanently',
+                  },
+                  {
+                    id: 'delete-to-trashbin',
+                    label: 'Delete to Trashbin',
+                    isDisabled: conversation.isInTrashbin === true,
+                  },
+                ],
+              }}
+              config={{
+                className: 'conversation-delete-dropdown',
+                minWidth: 150,
+              }}
+              onEvent={(eventType: string, eventData: any) => {
+                if (eventType !== 'itemClick') return
+                if (eventData?.itemId === 'delete-permanently') {
+                  appStore.deleteConversation(conversation.conversationId)
+                }
+                if (eventData?.itemId === 'delete-to-trashbin') {
+                  appStore.moveConversationToTrashbin(conversation.conversationId)
+                }
+              }}
+            />
+          ) : null}
           <button
             type="button"
             className="main-btn"
@@ -101,7 +108,15 @@ const ConversationPanel = observer(() => {
   )
 })
 
-const ConversationTitle = observer(({ conversationId, titleText }: { conversationId: string, titleText: string }) => {
+const ConversationTitle = observer(({
+  conversationId,
+  titleText,
+  isRenameEnabled,
+}: {
+  conversationId: string
+  titleText: string
+  isRenameEnabled: boolean
+}) => {
   const editRef = useRef<HTMLDivElement | null>(null)
   const isEditing = (
     appStore.conversationRenameEditId === conversationId
@@ -128,13 +143,15 @@ const ConversationTitle = observer(({ conversationId, titleText }: { conversatio
         <div className="conversation-title">
           {titleText}
         </div>
-        <button
-          type="button"
-          className="conversation-title-edit-btn"
-          onClick={() => appStore.startRenameConversation(conversationId, 'title')}
-        >
-          <EditIcon width={14} height={14} />
-        </button>
+        {isRenameEnabled ? (
+          <button
+            type="button"
+            className="conversation-title-edit-btn"
+            onClick={() => appStore.startRenameConversation(conversationId, 'title')}
+          >
+            <EditIcon width={14} height={14} />
+          </button>
+        ) : null}
       </div>
     )
   }

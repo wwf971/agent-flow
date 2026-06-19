@@ -217,5 +217,5 @@ Segment types:
 - Event creation allocates a new event ID.
 - Every event insert updates parent conversation ordering and update time.
 - Event creation and parent conversation update must be in one transaction.
-- Conversation delete should remove the conversation and all child events in one transaction.
+- Conversation delete should remove the conversation, descendant conversations, and all descendant events in one transaction.
 - Events should be read in conversation order.

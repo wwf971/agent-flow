@@ -46,7 +46,6 @@ backend/iteration_scheduler.py
 database/init_table.sql
 config/conversation_content_type.yaml
 config/templates.py
-script/_1_reinit_database.py
 ```
 
 Responsibilities:
@@ -85,6 +84,8 @@ If orchestration fails after a conversation exists, append `EndAbnormal/BackendE
 Each event append must insert the event row and update `conversation.metadata.eventList` in one transaction.
 
 Orchestration concepts are in `doc/orchesatrator.md`. Task scheduler and worker details are in `doc/conversation-iter-task.md`.
+
+Normal startup creates missing schema only. It does not reinitialize an existing database.
 
 ## Event Types
 

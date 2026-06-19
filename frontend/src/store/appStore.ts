@@ -20,6 +20,7 @@ export type ConversationItem = {
   metadata: Record<string, any>
   isInTrashbin?: boolean
   rankGlobal: string
+  parentId: string
   version?: number
   stateCode?: number
   execStatusCode?: number
@@ -66,6 +67,12 @@ const OPERATION_KEY = {
   messageSend: 'message-send',
 } as const
 
+const STATE_WAIT_SUBAGENT = 400
+
+const EXEC_STATUS_PENDING = 10
+const EXEC_STATUS_RUNNING = 20
+const EXEC_STATUS_RETRY_WAIT = 30
+
 function createOperationState(statusText: OperationState['statusText'], messageText = ''): OperationState {
   return {
     statusText,
@@ -78,6 +85,7 @@ class AppStore {
   templateList: TemplateItem[] = []
   conversationById: Record<string, ConversationItem> = {}
   conversationIdList: string[] = []
+  childConversationIdListByParentId: Record<string, string[]> = {}
   eventListByConversationId: Record<string, EventItem[]> = {}
   templateSelectedKey = ''
   conversationSelectedId = ''
@@ -116,6 +124,7 @@ class AppStore {
       metadata: item.metadata || {},
       isInTrashbin: item.isInTrashbin === true,
       rankGlobal: String(item.rankGlobal || ''),
+      parentId: this.normalizeConversationId((item as ConversationItem).parentId),
       version: Number(item.version || 0),
       stateCode: Number(item.stateCode || 100),
       execStatusCode: Number(item.execStatusCode || 0),
@@ -169,6 +178,7 @@ class AppStore {
     const statusText = String(item.metadata?.statusText || 'active')
     const isTurnFinished = (
       item.metadata?.isUserTurn !== false
+      || Number(item.stateCode || 100) === STATE_WAIT_SUBAGENT
       || statusText === 'completed'
       || statusText === 'archived'
       || item.isInTrashbin === true
@@ -234,6 +244,10 @@ class AppStore {
       .filter(Boolean)
   }
 
+  get conversationListAll() {
+    return Object.values(this.conversationById)
+  }
+
   get eventListCurrent() {
     if (!this.conversationSelectedId) return []
     return this.eventListByConversationId[this.conversationSelectedId] || []
@@ -252,11 +266,27 @@ class AppStore {
     }
     const statusText = String(conversation.metadata?.statusText || 'active')
     const templateKey = String(conversation.metadata?.templateKey || 'free-talk')
+    const stateCode = Number(conversation.stateCode || 100)
+    const execStatusCode = Number(conversation.execStatusCode || 0)
     const operationTemplateStart = this.operationByConversationId[conversation.conversationId]?.['template-start']
     const isTemplateStarting = statusText === 'starting' || operationTemplateStart?.statusText === 'running'
-    const isWaitingForReply = (
+    const isConversationWorkActive = (
+      stateCode < 0
+      || execStatusCode === EXEC_STATUS_PENDING
+      || execStatusCode === EXEC_STATUS_RUNNING
+      || execStatusCode === EXEC_STATUS_RETRY_WAIT
+    )
+    const isMessageOperationWaiting = (
       this.getOperationConversation(conversation.conversationId, OPERATION_KEY.messageSend).statusText === 'running'
-      || (statusText === 'active' && conversation.metadata?.isUserTurn === false && templateKey !== 'mcp-tool-all')
+      && stateCode !== STATE_WAIT_SUBAGENT
+    )
+    const isWaitingForReply = (
+      isMessageOperationWaiting
+      || (
+        statusText === 'active'
+        && templateKey !== 'mcp-tool-all'
+        && isConversationWorkActive
+      )
     )
     if (!isTemplateStarting && !isWaitingForReply) {
       return {
@@ -289,11 +319,11 @@ class AppStore {
     const lineList: string[] = []
     const execStatusCode = Number(conversation.execStatusCode || 0)
     const retryCount = Number(conversation.leaseRetryCount || 0)
-    if (execStatusCode === 10) {
+    if (execStatusCode === EXEC_STATUS_PENDING) {
       lineList.push('Status: Pending')
-    } else if (execStatusCode === 20) {
+    } else if (execStatusCode === EXEC_STATUS_RUNNING) {
       lineList.push('Status: Running')
-    } else if (execStatusCode === 30) {
+    } else if (execStatusCode === EXEC_STATUS_RETRY_WAIT) {
       lineList.push('Status: Retry Wait')
     }
     lineList.push(`Retry Num: ${retryCount}`)
@@ -314,25 +344,39 @@ class AppStore {
   }
 
   get conversationListActive() {
-    return sortByGlobalRank(this.conversationList.filter((item) => (
+    return sortByGlobalRank(this.conversationListAll.filter((item) => (
       item.isInTrashbin !== true
+      && !item.parentId
       && String(item.metadata?.statusText || 'active') !== 'archived'
     )))
   }
 
   get conversationListHistory() {
-    return sortByGlobalRank(this.conversationList.filter((item) => (
+    return sortByGlobalRank(this.conversationListAll.filter((item) => (
       item.isInTrashbin !== true
+      && !item.parentId
       && String(item.metadata?.statusText || '') === 'archived'
     )))
   }
 
   get conversationListPresent() {
-    return sortByGlobalRank(this.conversationList.filter((item) => item.isInTrashbin !== true))
+    return sortByGlobalRank(this.conversationListAll.filter((item) => (
+      item.isInTrashbin !== true
+      && !item.parentId
+    )))
   }
 
   get conversationListTrashbin() {
-    return this.conversationList.filter((item) => item.isInTrashbin === true)
+    return this.conversationListAll.filter((item) => item.isInTrashbin === true && !item.parentId)
+  }
+
+  getChildConversationIdList(parentConversationId: string) {
+    const parentId = this.normalizeConversationId(parentConversationId)
+    const childIdListLoaded = this.childConversationIdListByParentId[parentId]
+    if (childIdListLoaded) return childIdListLoaded
+    const metadata = this.conversationById[parentId]?.metadata || {}
+    const childIdList = Array.isArray(metadata.childConversationIdList) ? metadata.childConversationIdList : []
+    return childIdList.map((item) => this.normalizeConversationId(item)).filter(Boolean)
   }
 
   get isUserTurn() {
@@ -459,9 +503,17 @@ class AppStore {
 
   async acceptConversationUpdate(conversationId: string) {
     const conversationIdNormalized = this.normalizeConversationId(conversationId)
-    await this.requestConversationList(true)
+    await this.requestConversationListAll(true)
     if (conversationIdNormalized && conversationIdNormalized === this.conversationSelectedId) {
       await this.requestEventList(conversationIdNormalized, true)
+    }
+    const conversationChanged = this.conversationById[conversationIdNormalized]
+    const parentId = this.normalizeConversationId(conversationChanged?.parentId)
+    if (parentId && parentId === this.conversationSelectedId) {
+      await this.requestChildConversationList(parentId, true)
+    }
+    if (this.conversationSelectedId) {
+      await this.requestSubagentChildrenForSelected(true)
     }
   }
 
@@ -513,7 +565,10 @@ class AppStore {
           this.syncConversationOperationState(item)
         })
         Object.keys(conversationByIdNext).forEach((conversationId) => {
-          if (!itemList.some((item) => item.conversationId === conversationId)) {
+          if (
+            !itemList.some((item) => item.conversationId === conversationId)
+            && !conversationByIdNext[conversationId]?.parentId
+          ) {
             delete conversationByIdNext[conversationId]
             delete this.eventListByConversationId[conversationId]
           }
@@ -539,6 +594,100 @@ class AppStore {
         })
       }
     }
+  }
+
+  async requestConversationListAll(isQuiet = true) {
+    try {
+      const data = await requestAuthenticatedJson<{ items: ConversationItem[] }>('/api/conversation/list', {
+        method: 'POST',
+        body: JSON.stringify({ pageSize: 200, parentId: '*' }),
+      })
+      runInAction(() => {
+        const itemList = (data.items || []).map((item) => this.normalizeConversationItem(item))
+        const conversationByIdNext: Record<string, ConversationItem> = { ...this.conversationById }
+        const childByParentNext: Record<string, string[]> = { ...this.childConversationIdListByParentId }
+        itemList.forEach((item) => {
+          conversationByIdNext[item.conversationId] = item
+          this.syncConversationOperationState(item)
+        })
+        const rootIdList = itemList
+          .filter((item) => !item.parentId)
+          .map((item) => item.conversationId)
+        this.conversationIdList = rootIdList
+        itemList
+          .filter((item) => item.parentId)
+          .forEach((item) => {
+            const childIdList = childByParentNext[item.parentId] || []
+            if (!childIdList.includes(item.conversationId)) {
+              childByParentNext[item.parentId] = [...childIdList, item.conversationId]
+            }
+          })
+        Object.keys(childByParentNext).forEach((parentId) => {
+          const childItemList = childByParentNext[parentId]
+            .map((conversationId) => conversationByIdNext[conversationId])
+            .filter(Boolean)
+          childByParentNext[parentId] = this.buildChildConversationIdList(parentId, childItemList, conversationByIdNext)
+        })
+        this.conversationById = conversationByIdNext
+        this.childConversationIdListByParentId = childByParentNext
+      })
+    } catch (error: unknown) {
+      if (!isQuiet) {
+        runInAction(() => {
+          this.errorText = String(error)
+        })
+      }
+    }
+  }
+
+  async requestChildConversationList(parentConversationId: string, isQuiet = true) {
+    const parentId = this.normalizeConversationId(parentConversationId)
+    if (!parentId) return
+    try {
+      const data = await requestAuthenticatedJson<{ items: ConversationItem[] }>('/api/conversation/list', {
+        method: 'POST',
+        body: JSON.stringify({ pageSize: 100, parentId }),
+      })
+      runInAction(() => {
+        const itemList = (data.items || []).map((item) => this.normalizeConversationItem(item))
+        const conversationByIdNext: Record<string, ConversationItem> = { ...this.conversationById }
+        itemList.forEach((item) => {
+          conversationByIdNext[item.conversationId] = item
+          this.syncConversationOperationState(item)
+        })
+        this.conversationById = conversationByIdNext
+        this.childConversationIdListByParentId[parentId] = this.buildChildConversationIdList(parentId, itemList, conversationByIdNext)
+      })
+    } catch (error: unknown) {
+      if (!isQuiet) {
+        runInAction(() => {
+          this.errorText = String(error)
+        })
+      }
+    }
+  }
+
+  buildChildConversationIdList(
+    parentId: string,
+    itemList: ConversationItem[],
+    conversationByIdSource: Record<string, ConversationItem> = this.conversationById,
+  ) {
+    const metadata = conversationByIdSource[parentId]?.metadata || {}
+    const childIdListFromParent = Array.isArray(metadata.childConversationIdList)
+      ? metadata.childConversationIdList.map((item) => this.normalizeConversationId(item)).filter(Boolean)
+      : []
+    const itemIdSet = new Set(itemList.map((item) => item.conversationId))
+    const orderedIdList = childIdListFromParent.filter((conversationId) => itemIdSet.has(conversationId))
+    const orderedIdSet = new Set(orderedIdList)
+    const extraIdList = itemList
+      .filter((item) => !orderedIdSet.has(item.conversationId))
+      .sort((itemA, itemB) => {
+        const timeCompare = String(itemA.createAt || '').localeCompare(String(itemB.createAt || ''))
+        if (timeCompare !== 0) return timeCompare
+        return itemA.conversationId.localeCompare(itemB.conversationId)
+      })
+      .map((item) => item.conversationId)
+    return [...orderedIdList, ...extraIdList]
   }
 
   async requestEventList(conversationId: string, isQuiet = false) {
@@ -588,9 +737,41 @@ class AppStore {
     const conversationIdNormalized = this.normalizeConversationId(this.conversationSelectedId)
     if (!conversationIdNormalized || !this.conversationSelected) return
     await Promise.all([
-      this.requestConversationList(isQuiet),
+      this.requestConversationListAll(isQuiet),
       this.requestEventList(conversationIdNormalized, isQuiet),
     ])
+    await this.requestSubagentChildrenForSelected(isQuiet)
+  }
+
+  async requestSubagentChildrenForSelected(isQuiet = true) {
+    const conversationId = this.normalizeConversationId(this.conversationSelectedId)
+    if (!conversationId) return
+    await this.requestChildConversationList(conversationId, isQuiet)
+    const childIdList = this.getChildConversationIdList(conversationId)
+    await Promise.all(childIdList.map((childId) => this.requestEventList(childId, true)))
+  }
+
+  async requestSubagentChildrenForEvent(event: EventItem, isQuiet = true) {
+    const parentId = this.normalizeConversationId(event.conversationId)
+    if (!parentId) return
+    await this.requestChildConversationList(parentId, isQuiet)
+    const childIdList = this.getSubagentChildIdListFromEvent(event)
+    await Promise.all(childIdList.map((childId) => this.requestEventList(childId, true)))
+  }
+
+  getSubagentChildIdListFromEvent(event: EventItem) {
+    const metadata = event.metadata || {}
+    const contentData = event.contentJson?.data?.[0]?.data || {}
+    const childIdListRaw = (
+      Array.isArray(metadata.childConversationIdList)
+        ? metadata.childConversationIdList
+        : contentData.childConversationIdList
+    )
+    const childIdList = Array.isArray(childIdListRaw) ? childIdListRaw : []
+    if (childIdList.length) {
+      return childIdList.map((item) => this.normalizeConversationId(item)).filter(Boolean)
+    }
+    return this.getChildConversationIdList(event.conversationId)
   }
 
   applyConversationUpdate(conversation: ConversationItem, eventList: EventItem[]) {
@@ -652,6 +833,7 @@ class AppStore {
         this.requestConversationList(true),
         this.requestEventList(data.conversationId, true),
       ])
+      return data
     } catch (error: unknown) {
       const data = error instanceof ApiRequestError ? error.data as ConversationItem | undefined : undefined
       if (data?.conversationId) {
@@ -663,11 +845,60 @@ class AppStore {
         this.noticeText = ''
         this.setOperationByKey(OPERATION_KEY.conversationCreate, createOperationState('error', String(error)))
       })
+      return null
     }
   }
 
   async createEmptyConversation() {
     await this.createConversationFromTemplate('free-talk')
+  }
+
+  async createConversationFromTemplateDefault(templateKey: string) {
+    if (templateKey === 'subagent-test') {
+      await this.createSubagentTestConversation()
+      return
+    }
+    await this.createConversationFromTemplate(templateKey)
+  }
+
+  async createSubagentTestConversation() {
+    runInAction(() => {
+      this.errorText = ''
+      this.noticeText = 'Creating subagent test'
+    })
+    const conversation = await this.createConversationFromTemplate('subagent-test')
+    const conversationId = this.normalizeConversationId(conversation?.conversationId)
+    if (!conversationId) return
+    const messageText = 'Ask one child subagent to return a short hello text to the parent.'
+    runInAction(() => {
+      this.setOperationByConversationId(conversationId, OPERATION_KEY.messageSend, createOperationState('running', 'Starting subagent test'))
+    })
+    try {
+      const data = await requestAuthenticatedJson<{ conversationId: string, eventUser?: EventItem }>('/api/orchestrator/turn/create', {
+        method: 'POST',
+        body: JSON.stringify({
+          conversationId,
+          messageText,
+          timezone: new Date().getTimezoneOffset() * -1,
+        }),
+      })
+      runInAction(() => {
+        if (data.eventUser) {
+          this.appendEventIfMissing(data.eventUser)
+        }
+        this.noticeText = ''
+      })
+      await Promise.all([
+        this.requestConversationListAll(true),
+        this.requestEventList(conversationId, true),
+      ])
+    } catch (error: unknown) {
+      runInAction(() => {
+        this.errorText = String(error)
+        this.noticeText = ''
+        this.setOperationByConversationId(conversationId, OPERATION_KEY.messageSend, createOperationState('error', String(error)))
+      })
+    }
   }
 
   setMessageDraftText(value: string) {
@@ -742,6 +973,7 @@ class AppStore {
     const conversationIdNormalized = this.normalizeConversationId(conversationId)
     const conversation = this.conversationById[conversationIdNormalized]
     if (!conversation) return
+    if (conversation.parentId) return
     this.conversationRenameEditId = conversationIdNormalized
     this.conversationRenameSurfaceText = surfaceText
     this.conversationRenameDraftText = String(conversation.metadata?.title || conversation.metadata?.templateName || 'Conversation')
@@ -757,6 +989,10 @@ class AppStore {
     const conversationIdNormalized = this.normalizeConversationId(conversationId)
     if (!conversationIdNormalized || this.isConversationRenameSaving) return
     const conversation = this.conversationById[conversationIdNormalized]
+    if (conversation?.parentId) {
+      this.cancelRenameConversation()
+      return
+    }
     const titleText = String(titleTextRaw ?? this.conversationRenameDraftText).trim()
     const titlePrevious = String(conversation?.metadata?.title || conversation?.metadata?.templateName || 'Conversation')
     if (!titleText || titleText === titlePrevious) {
@@ -796,6 +1032,7 @@ class AppStore {
   async moveConversationToTrashbin(conversationId: string) {
     const conversationIdNormalized = this.normalizeConversationId(conversationId)
     if (!conversationIdNormalized) return
+    if (this.conversationById[conversationIdNormalized]?.parentId) return
     runInAction(() => {
       this.errorText = ''
       this.noticeText = 'Deleting to trashbin'
@@ -825,6 +1062,7 @@ class AppStore {
   async reorderConversation(conversationId: string, conversationIdBefore: string, conversationIdAfter: string) {
     const conversationIdNormalized = this.normalizeConversationId(conversationId)
     if (!conversationIdNormalized || this.isConversationReorderSaving) return
+    if (this.conversationById[conversationIdNormalized]?.parentId) return
     runInAction(() => {
       this.errorText = ''
       this.noticeText = 'Reordering conversation'
@@ -860,6 +1098,7 @@ class AppStore {
   async deleteConversation(conversationId: string) {
     const conversationIdNormalized = this.normalizeConversationId(conversationId)
     if (!conversationIdNormalized) return
+    if (this.conversationById[conversationIdNormalized]?.parentId) return
     runInAction(() => {
       this.errorText = ''
       this.noticeText = 'Deleting conversation'

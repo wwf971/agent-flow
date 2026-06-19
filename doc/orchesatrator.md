@@ -2,21 +2,21 @@
 
 ## Scope
 
-An orchestrator decides how a conversation advances.
+An orchestrator is the transition logic for a conversation.
 
-The conversation itself is only an ordered event list plus metadata. The orchestrator reads the current conversation state, runs one iteration, and produces zero or more new events. Those events are appended to the same conversation timeline.
+A conversation stores durable state: metadata plus an ordered event list. The orchestrator reads that state, runs one iteration, and returns new event dictionaries. Backend code persists those events and updates conversation metadata.
 
-This document owns the orchestration concept: how an orchestrator is selected, what input it receives, and how it produces events. `doc/conversation.md` owns event meaning and conversation state. `doc/agent-flow.md` is the root guide.
+This document covers the concept of orchestrator and orchestrator instances(also called templates), and how to use orchestrator to interate a conversation. `doc/conversation.md` covers event meaning and storage rules. `doc/conversation-iter-task.md` covers leases, workers, retries, and scheduler behavior.
 
-## Core Idea
+## Core Model
 
-One conversation is one multi-turn interaction with an agent. It is rolled out by repeatedly iterating the orchestrator associated with that conversation.
+One conversation is one multi-turn interaction with an agent. It is rolled out by repeatedly iterating the orchestrator selected by `conversation.metadata.templateKey`.
 
-The orchestrator is selected by `conversation.metadata.templateKey`.
+Template configuration lives in `config/templates.py`. Template module loading lives in `backend/conifg_template.py`.
 
-Template keys:
+Current templates:
 
-| Key | User visible | Orchestrator |
+| Key | User visible | Implementation |
 | --- | --- | --- |
 | `free-talk` | yes | built into `backend/iteration_executor.py` |
 | `web-fetch-local` | yes | `test/_0_web_fetch_local/orchestrator.py` |
@@ -24,37 +24,11 @@ Template keys:
 | `mcp-interactive` | yes | `test/_1_mcp/orchestrator.py` |
 | `subagent-basic` | no | `test/_2_sub_agent/orchestrator_subagent.py` |
 
-Template configuration lives in `config/templates.py`. Template module loading lives in `backend/conifg_template.py`.
+The template key is durable conversation metadata. The orchestrator module should not create another source of truth for event order, user-turn state, or completion state.
 
-## Relationship To Conversation
+## Iteration Interface
 
-The conversation is durable state. The orchestrator is transition logic.
-
-The orchestrator must not create a second source of truth for event order, user-turn state, or completion state. It reads the conversation event list and metadata, then returns event dictionaries. Backend code persists the events and related metadata changes.
-
-The event field schema and content type rules are defined in `doc/conversation.md`. This document only uses event names to explain orchestration flow.
-
-## Iteration Input
-
-The backend uses a small context object to call an orchestrator. Important fields are:
-
-| Field | Meaning |
-| --- | --- |
-| `templateKey` | selects the conversation orchestrator |
-| `iterType` | coarse iteration entry point, such as `templateStart` or `userMessage` |
-| `conversationId` | conversation being iterated |
-| `messageText` | latest user message for a user-message iteration |
-| `eventList` | loaded event history in conversation order |
-| `initialPrompt` | startup prompt used by internal subagent conversations |
-| `maxTurns` | maximum turns for internal subagent loops |
-| `backendToolList` | backend tools exposed to a template orchestrator |
-| `executeBackendTool` | callback used by template orchestrators to run backend-owned tools |
-
-The orchestrator returns an iterator of event dictionaries. Each yielded item is written as an event row by the backend.
-
-## Iteration Branch
-
-`backend/iteration_executor.py` is the orchestrator entry point.
+`backend/iteration_executor.py` is the common entry point:
 
 ```text
 run_orchestrator(context)
@@ -62,131 +36,131 @@ run_orchestrator(context)
   iter_orchestrator(state)
 ```
 
-`iter_orchestrator(state)` branches like this:
+Important context fields:
+
+| Field | Meaning |
+| --- | --- |
+| `templateKey` | selects the orchestrator |
+| `iterType` | entry point, usually `templateStart` or `userMessage` |
+| `conversationId` | conversation being iterated |
+| `messageText` | latest user text for user-message iteration |
+| `eventList` | loaded event history in conversation order |
+| `initialPrompt` | internal subagent startup task |
+| `maxTurns` | internal subagent turn limit |
+| `backendToolList` | backend-owned tools exposed to template code |
+| `executeBackendTool` | callback for backend-owned tool execution |
+
+The orchestrator returns an iterator of event dictionaries. The backend writes each item as an event row and appends its ID to `conversation.metadata.eventList`.
+
+`iter_orchestrator(state)` branches by current state:
 
 | Condition | Action |
 | --- | --- |
-| `iterType == templateStart` | call the selected template module with no user message |
-| `templateKey == free-talk` | build a plain text prompt from text events and call the model |
+| `iterType == templateStart` | call the selected template module without a user message |
+| `templateKey == free-talk` | build a plain prompt from text events and call the model |
 | otherwise | call the selected template module with event history and latest user message |
 
-The backend persists generated events outside the template module. This keeps the template interface small: template code decides what events should happen next, while backend code owns database writes.
+## User Message Process
 
-## Task-Driven Process
-
-The current backend accepts user input synchronously, then schedules orchestration as durable database work.
+User-entered turns now use the task-driven backend path.
 
 For `/api/orchestrator/turn/create`:
 
-1. Validate that the conversation accepts user input.
-2. Append the `userMessage / textSimple` event.
-3. Set `conversation.metadata.isUserTurn = false`.
+1. Validate that the conversation can accept user input.
+2. Append `userMessage / textSimple`.
+3. Set `metadata.isUserTurn = false`.
 4. Set `stateCode = USER_MESSAGE_READY` and `execStatusCode = PENDING`.
 5. Notify `conversation_task_ready`.
-6. Return the accepted user event immediately with `isScheduled = true`.
-7. A scheduler leases the conversation to an idle worker.
-8. The worker loads the event list, runs one orchestrator iteration, and commits generated events.
-9. The worker updates metadata and returns the conversation to `WAIT_USER`, `COMPLETED`, or another scheduler-visible state.
+6. Return the accepted user event with `isScheduled = true`.
+7. A scheduler leases the conversation to a worker.
+8. The worker loads events, runs one orchestrator iteration, and commits generated events.
+9. The worker sets the next state, usually `WAIT_USER` or `COMPLETED`.
 
-The route does not return an agent reply directly. The frontend should refresh events from the API after update notifications or quiet polling.
+The route does not return an agent reply. The frontend refreshes events from the API after update notifications and quiet polling.
 
-For a normal `free-talk` turn, the worker calls the built-in orchestrator and appends one `agentMessage / textSimple` event. For template turns, the worker calls the selected template module and appends each yielded event.
+## Template Startup Process
 
-`doc/conversation-iter-task.md` owns scheduler, worker, lease, retry, and restart behavior.
+`POST /api/conversation/create/from-template` creates the conversation and may run a `templateStart` iteration.
 
-## Legacy Thread-Based Process
-
-The thread-based backend runs template creation and user turns in background threads. The request stores accepted input quickly. Generated events are appended by the background runner.
-
-For `/api/conversation/create/from-template`:
+Templates with `isStartBackground = true` still use the older daemon-thread startup path:
 
 1. Create the conversation with template metadata.
-2. If the template starts in the background, run `templateStart`.
+2. Start `templateStart`.
 3. Write the first generated event before returning when available.
-4. Continue writing remaining generated events in a daemon thread.
-5. Apply the template finish metadata when startup finishes.
+4. Continue writing remaining startup events in the background.
+5. Apply `metadataStartFinish` when startup finishes.
 
-For `/api/orchestrator/turn/create`:
+This startup path is separate from the task-driven user-message worker path.
 
-1. Validate that the conversation accepts user input.
-2. Set `isUserTurn = false`.
-3. Append the `userMessage / textSimple` event.
-4. Return immediately with the user event and no generated events.
-5. Run the selected orchestrator in a daemon thread.
-6. Append each generated event as it is yielded.
-7. Apply finish metadata, usually `isUserTurn = true`, unless the conversation completed or failed.
+## Built-In Free Talk
 
-If a backend exception happens after a conversation exists, the backend appends `EndAbnormal / BackendException`, sets `statusText = failed`, sets `isUserTurn = false`, and records `endStatusText = abnormal`.
+`free-talk` is implemented in `backend/iteration_executor.py`.
 
-This path is still useful for understanding older code and template startup behavior, but user-message iteration is now routed through the task-driven worker path.
+It reads prior `textSimple` events and converts them into a plain prompt:
 
-## Orchestrator Types
-
-### Free Talk
-
-`free-talk` is built into `backend/iteration_executor.py`.
-
-It reads previous `textSimple` events and converts them to a plain prompt:
-
-| Event source | Prompt line |
+| Event source | Prompt text |
 | --- | --- |
 | `userMessage` | `User:` |
 | `agentMessage` | `Assistant:` |
 | `orchestratorMessage` | `Orchestrator:` |
 
-It then appends one `agentMessage / textSimple` event.
+It then yields one `agentMessage / textSimple` event.
 
-### Web Fetch Local
+## Web Fetch Local
 
 `web-fetch-local` lives in `test/_0_web_fetch_local/orchestrator.py`.
 
-It converts the event history into a simple dialogue, fetches live page text through the experiment helper, asks the model to answer from fetched text, and yields one `agentMessage / textSimple` event with debug metadata.
+It converts event history into a simple dialogue, fetches live page text through the experiment helper, asks the model to answer from fetched text, and yields one `agentMessage / textSimple` event with debug metadata.
 
-### MCP Tool Templates
+## MCP Tool Templates
 
 `mcp-tool-all` and `mcp-interactive` share `test/_1_mcp/orchestrator.py`.
 
-The orchestrator starts by yielding an `orchestratorMessage / textSimple` startup prompt. Then it loops:
+The template module rebuilds model messages from events. `agentMessage` events become assistant messages; other text events become user-side messages.
 
-1. Ask the agent for a response.
-2. Parse the response as a tool call.
-3. If parsing fails, append an agent rejection event and an orchestrator retry instruction.
-4. If parsing succeeds, append `agentMessage / toolCall`.
-5. Execute the tool.
-6. Append `orchestratorMessage / toolResult`.
-7. Continue until the mode is complete or the loop limit is reached.
+The tool loop:
 
-`mcp-tool-all` is a one-shot exercise. It does not accept user messages and finishes as completed.
+1. Yield an initial `orchestratorMessage / textSimple` prompt if no initial prompt exists.
+2. Ask the model for a reply.
+3. Parse the reply as a tool call when the current mode requires one.
+4. If parsing fails in exercise mode, yield an agent rejection event and an orchestrator retry instruction.
+5. If the reply is accepted as natural text in interactive mode, yield `agentMessage / textSimple` and stop the iteration.
+6. If parsing succeeds, yield `agentMessage / toolCall`.
+7. Execute the tool or backend-owned tool.
+8. Yield `orchestratorMessage / toolResult`.
+9. Continue until the loop is complete or the loop limit is reached.
 
-`mcp-interactive` starts with the same exercise. After startup has produced the initial prompt, later user-message iterations switch to interactive mode: natural-language replies are allowed, repeated tools are allowed, and `tool_terminate_conversation` is available when the user wants to end the conversation.
+`mcp-tool-all` is a one-shot exercise. It does not accept user messages and finishes as completed after startup.
 
-### Subagent Tool
+`mcp-interactive` starts with the same exercise. Later user-message iterations switch to interactive mode: natural-language replies are allowed, repeated tools are allowed, and `tool_terminate_conversation` can end the conversation.
 
-The thread-based backend supports subagents through a backend-owned tool.
+## Subagents
 
-The parent orchestrator can call the backend tool `tool_subagent`. The backend then:
+Subagents are currently exposed as the backend-owned tool `tool_subagent`.
 
-1. Creates child conversations with `parentId` pointing at the parent.
-2. Appends `orchestratorMessage / subAgentStart` in the parent.
-3. Runs each child conversation in a thread using the internal `subagent-basic` template.
-4. Waits for child results.
-5. Appends `orchestratorMessage / subAgentResult` in the parent.
+When the parent orchestrator calls it, the task-driven flow is:
 
-Each child uses `test/_2_sub_agent/orchestrator_subagent.py`. A child must eventually call `tool_return_to_parent`, which produces `orchestratorMessage / subAgentReturn` in the child conversation.
+1. Append the parent `agentMessage / toolCall` request.
+2. Set the parent to `SUBAGENT_LAUNCH_READY`.
+3. In a later worker task, create child conversations with `parentId` pointing at the parent.
+4. Append `orchestratorMessage / subAgentStart` in the parent.
+5. Set the parent to `WAIT_SUBAGENT`.
+6. Run each child conversation as independent scheduled work.
+7. When the last child reaches terminal state, append `orchestratorMessage / subAgentResult` in the parent and set the parent to `TOOL_RESULT_READY`.
 
-In the task-based design, child work should be explicit scheduler work instead of hidden work inside a parent process.
+Each child uses `test/_2_sub_agent/orchestrator_subagent.py`. A child must end by calling `tool_return_to_parent`, which yields `orchestratorMessage / subAgentReturn` in the child conversation.
+
+The detailed state and database design is in `doc/subagent.md`.
 
 ## Event Ownership
 
-The orchestrator decides event semantics. The backend owns persistence.
-
-Use these rules:
+The orchestrator decides what generated events mean. The backend owns durable writes.
 
 | Event | Created by | Meaning |
 | --- | --- | --- |
 | `userMessage / textSimple` | backend route | user input was accepted |
 | `agentMessage / textSimple` | orchestrator | model answered naturally |
-| `agentMessage / toolCall` | orchestrator | model requested tool execution |
+| `agentMessage / toolCall` | orchestrator | model requested a tool |
 | `orchestratorMessage / textSimple` | orchestrator or backend | instruction, retry, startup prompt, or status text |
 | `orchestratorMessage / toolResult` | orchestrator | tool result returned to the agent loop |
 | `orchestratorMessage / subAgentStart` | backend tool | child conversations were started |
@@ -194,10 +168,19 @@ Use these rules:
 | `orchestratorMessage / subAgentReturn` | child orchestrator | child returned to parent |
 | `EndAbnormal / BackendException` | backend | backend could not continue safely |
 
-## Task-Based Process
+If orchestration fails after a conversation exists, the backend appends `EndAbnormal / BackendException`, sets `statusText = failed`, sets `isUserTurn = false`, and records `endStatusText = abnormal`.
 
-`doc/conversation-iter-task.md` describes the task-based orchestration process.
+## Relationship To Task Iteration
 
-The main change is ownership. A process should not own a conversation because it has a thread running. A worker should own only one leased iteration, and the database should authorize the final write through `version`, `leaseId`, `leaseWorkerId`, and `leaseExpireAt`.
+`doc/conversation-iter-task.md` describes how an iteration is scheduled and committed. This document describes what the iteration does.
 
-With this design, subagents become normal scheduled child conversations. Parent and child progress can be parallelized across stateless worker containers.
+The important boundary is ownership:
+
+| Layer | Owns |
+| --- | --- |
+| conversation model | durable event list and metadata |
+| orchestrator | generated event sequence for one iteration |
+| task worker | lease, execution attempt, commit, retry, and failure handling |
+| database | final authorization through `version`, `leaseId`, `leaseWorkerId`, and `leaseExpireAt` |
+
+That boundary lets the backend move toward stateless workers without changing the template interface.

@@ -4,6 +4,7 @@ import * as ReactCompMisc from '@wwf971/react-comp-misc'
 import { EventItem } from '../store/appStore'
 import SegMessage, { SegMessageData } from '../conversation-segment/SegMessage'
 import RoleCard from './RoleCard'
+import MessageSubagent from './MessageSubagent'
 import './Message.css'
 
 const SegmentedControl = (ReactCompMisc as any).SegmentedControl
@@ -13,6 +14,9 @@ type MessageProps = {
 }
 
 const Message = observer(({ data }: MessageProps) => {
+  if (data.typeText === 'orchestratorMessage' && data.subtypeText === 'subAgentStart') {
+    return <MessageSubagent data={data} />
+  }
   const roleData = resolveRoleData(data.typeText)
   const displayData = resolveDisplayData(data)
   const [viewMode, setViewMode] = useState(displayData.segmentList.length > 0 ? 'structured' : 'text')

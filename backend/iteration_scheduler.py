@@ -22,7 +22,24 @@ if str(CONFIG_DIR) not in os.sys.path:
     os.sys.path.insert(0, str(CONFIG_DIR))
 
 from conversation_exec_status import EXEC_STATUS_IDLE, EXEC_STATUS_PENDING, EXEC_STATUS_RETRY_WAIT, EXEC_STATUS_RUNNING
-from conversation_state import STATE_COMPLETED, STATE_FAILED, STATE_USER_MESSAGE_READY, STATE_WAIT_USER
+from conversation_state import (
+    STATE_COMPLETED,
+    STATE_FAILED,
+    STATE_SUBAGENT_LAUNCH_READY,
+    STATE_TEMPLATE_START_READY,
+    STATE_TOOL_RESULT_READY,
+    STATE_USER_MESSAGE_READY,
+    STATE_WAIT_USER,
+)
+from subagent_runtime import (
+    commit_subagent_child_finish,
+    create_subagent_run,
+    ensure_subagent_schema_with_cursor,
+    initialize_subagent_run,
+    prepare_subagent_request_result,
+    build_subagent_child_finish_result,
+    commit_subagent_child_failed,
+)
 
 CHANNEL_TASK_READY = "conversation_task_ready"
 CHANNEL_WORKER_ASSIGN = "conversation_worker_assign"
@@ -89,6 +106,7 @@ def ensure_conversation_iter_schema():
                 where conversationId is null
                 """
             )
+            ensure_subagent_schema_with_cursor(cursor)
         return {"isConversationIterSchemaReady": True}
 
     return run_in_transaction(action)
@@ -457,6 +475,7 @@ def _fail_conversation_iteration(db, conversation_id: int, worker_id: str, error
                 """,
                 (conversation_id,),
             )
+    commit_subagent_child_failed(db, conversation_id, timezone, error_text)
     return True
 
 
@@ -707,33 +726,97 @@ def _load_iteration_data(task: dict[str, Any]):
 def _run_iteration(data: dict[str, Any]):
     from iteration_executor import _get_turn_finish_metadata, run_orchestrator
 
-    if int(data["stateCode"]) != STATE_USER_MESSAGE_READY:
+    state_code = int(data["stateCode"])
+    if state_code == STATE_SUBAGENT_LAUNCH_READY:
         return {
             "eventListNew": [],
-            "metadataUpdate": {"isUserTurn": True},
-            "stateCodeNext": STATE_WAIT_USER,
-            "execStatusCodeNext": EXEC_STATUS_IDLE,
+            "metadataUpdate": {},
+            "stateCodeNext": STATE_SUBAGENT_LAUNCH_READY,
+            "execStatusCodeNext": EXEC_STATUS_RUNNING,
+            "subAgentLaunch": True,
         }
-    event_list_new = list(
-        run_orchestrator(
-            {
-                "iterType": "userMessage",
-                "templateKey": data["templateKey"],
-                "conversationId": str(data["conversationId"]),
-                "messageText": data["messageText"],
-                "eventList": data["eventList"],
-                "logDir": None,
-                "timezone": data["timezone"],
-            }
+    if state_code == STATE_TEMPLATE_START_READY:
+        event_list_new = list(
+            run_orchestrator(
+                {
+                    "iterType": "templateStart",
+                    "templateKey": data["templateKey"],
+                    "conversationId": str(data["conversationId"]),
+                    "initialPrompt": str(data["metadata"].get("subAgentInitialPrompt") or ""),
+                    "maxTurns": int(data["metadata"].get("subAgentMaxTurns") or 0),
+                    "eventList": data["eventList"],
+                    "logDir": None,
+                    "timezone": data["timezone"],
+                }
+            )
         )
-    )
-    metadata_update = _get_turn_finish_metadata(event_list_new)
-    state_next = STATE_COMPLETED if metadata_update.get("statusText") == "completed" else STATE_WAIT_USER
+        child_finish_result = build_subagent_child_finish_result(data, event_list_new)
+        return {
+            "eventListNew": event_list_new,
+            "metadataUpdate": child_finish_result["metadataUpdate"],
+            "stateCodeNext": child_finish_result["stateCodeNext"],
+            "execStatusCodeNext": child_finish_result["execStatusCodeNext"],
+            "subAgentChildFinish": child_finish_result,
+        }
+    if state_code == STATE_TOOL_RESULT_READY:
+        event_list_new = list(
+            run_orchestrator(
+                {
+                    "iterType": "toolResult",
+                    "templateKey": data["templateKey"],
+                    "conversationId": str(data["conversationId"]),
+                    "messageText": "",
+                    "eventList": data["eventList"],
+                    "logDir": None,
+                    "timezone": data["timezone"],
+                }
+            )
+        )
+        metadata_update = _get_turn_finish_metadata(event_list_new)
+        state_next = STATE_COMPLETED if metadata_update.get("statusText") == "completed" else STATE_WAIT_USER
+        subagent_request = prepare_subagent_request_result(event_list_new)
+        if subagent_request:
+            metadata_update = {"isUserTurn": False}
+            state_next = STATE_SUBAGENT_LAUNCH_READY
+        return {
+            "eventListNew": event_list_new,
+            "metadataUpdate": metadata_update,
+            "stateCodeNext": state_next,
+            "execStatusCodeNext": None,
+            "subAgentRequest": subagent_request,
+        }
+    if state_code == STATE_USER_MESSAGE_READY:
+        event_list_new = list(
+            run_orchestrator(
+                {
+                    "iterType": "userMessage",
+                    "templateKey": data["templateKey"],
+                    "conversationId": str(data["conversationId"]),
+                    "messageText": data["messageText"],
+                    "eventList": data["eventList"],
+                    "logDir": None,
+                    "timezone": data["timezone"],
+                }
+            )
+        )
+        metadata_update = _get_turn_finish_metadata(event_list_new)
+        state_next = STATE_COMPLETED if metadata_update.get("statusText") == "completed" else STATE_WAIT_USER
+        subagent_request = prepare_subagent_request_result(event_list_new)
+        if subagent_request:
+            metadata_update = {"isUserTurn": False}
+            state_next = STATE_SUBAGENT_LAUNCH_READY
+        return {
+            "eventListNew": event_list_new,
+            "metadataUpdate": metadata_update,
+            "stateCodeNext": state_next,
+            "execStatusCodeNext": None,
+            "subAgentRequest": subagent_request,
+        }
     return {
-        "eventListNew": event_list_new,
-        "metadataUpdate": metadata_update,
-        "stateCodeNext": state_next,
-        "execStatusCodeNext": None,
+        "eventListNew": [],
+        "metadataUpdate": {"isUserTurn": True},
+        "stateCodeNext": STATE_WAIT_USER,
+        "execStatusCodeNext": EXEC_STATUS_IDLE,
     }
 
 
@@ -741,8 +824,45 @@ def _commit_iteration_result(db, task: dict[str, Any], data: dict[str, Any], res
     _verify_conversation_lease(db, task, data["version"])
     conversation_id = int(task["conversationId"])
     timezone = int(data.get("timezone") or 0)
+    if result.get("subAgentLaunch") is True:
+        result_launch = initialize_subagent_run(db, conversation_id, timezone)
+        with closing(dict_cursor(db)) as cursor:
+            cursor.execute("select metadata from conversation where id = %s for update", (conversation_id,))
+            row = cursor.fetchone()
+            if not row:
+                raise RuntimeError("conversation not found")
+            metadata_next = normalize_metadata(row["metadata"])
+            metadata_next.update(result_launch["metadataUpdate"])
+            cursor.execute(
+                """
+                update conversation
+                set metadata = %s::jsonb,
+                    stateCode = %s,
+                    execStatusCode = %s,
+                    version = version + 1,
+                    leaseId = null,
+                    leaseWorkerId = null,
+                    leaseExpireAt = null,
+                    leaseRetryCount = 0,
+                    leaseRetryAfterAt = null,
+                    updateAt = now(),
+                    updateAtTimezone = %s
+                where id = %s
+                """,
+                (
+                    json.dumps(metadata_next),
+                    int(result_launch["stateCodeNext"]),
+                    int(result_launch["execStatusCodeNext"]),
+                    timezone,
+                    conversation_id,
+                ),
+            )
+            _clear_worker_assignment_with_cursor(cursor, str(task["workerId"]))
+            cursor.execute("select pg_notify(%s, '')", (CHANNEL_TASK_READY,))
+        return
+    event_created_list = []
     for event_item in result.get("eventListNew") or []:
-        create_event_in_db(
+        event_created = create_event_in_db(
             db,
             conversation_id,
             event_item.get("typeText") or "agentMessage",
@@ -753,6 +873,13 @@ def _commit_iteration_result(db, task: dict[str, Any], data: dict[str, Any], res
             event_item.get("metadata"),
             timezone,
         )
+        event_created_list.append(event_created)
+    subagent_request = result.get("subAgentRequest") if isinstance(result.get("subAgentRequest"), dict) else None
+    if subagent_request:
+        event_index = int(subagent_request.get("eventIndex") or 0)
+        if event_index >= len(event_created_list):
+            raise RuntimeError("subagent request event was not committed")
+        create_subagent_run(db, conversation_id, event_created_list[event_index], subagent_request)
     metadata_update = result.get("metadataUpdate") if isinstance(result.get("metadataUpdate"), dict) else {}
     state_next = int(result.get("stateCodeNext") or STATE_WAIT_USER)
     exec_status_next = result.get("execStatusCodeNext")
@@ -786,6 +913,9 @@ def _commit_iteration_result(db, task: dict[str, Any], data: dict[str, Any], res
         _clear_worker_assignment_with_cursor(cursor, str(task["workerId"]))
         if state_next < 0:
             cursor.execute("select pg_notify(%s, '')", (CHANNEL_TASK_READY,))
+    subagent_child_finish = result.get("subAgentChildFinish") if isinstance(result.get("subAgentChildFinish"), dict) else None
+    if subagent_child_finish:
+        commit_subagent_child_finish(db, conversation_id, timezone, subagent_child_finish)
 
 
 def _verify_conversation_lease(db, task: dict[str, Any], version: int):

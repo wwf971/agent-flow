@@ -188,10 +188,12 @@ The executable schema is in `database/init_table.sql`.
 
 ## Reinitialize Database
 
-The database can be reinitialized manually from `database/init_table.sql`, through `script/reinit_database.py`, or through the backend endpoint:
+Reinitialization is destructive. `database/init_table.sql` drops and recreates conversation tables, so existing conversations and events are removed.
+
+Manual reinitialization can be run through `script/_1_reinit_database.py`, by applying `database/init_table.sql`, or through the backend endpoint:
 
 ```text
 POST /api/service/database/reinit
 ```
 
-This endpoint requires write permission.
+This endpoint requires write permission. Normal service startup and normal deploy should call schema bootstrap only; they should not reinitialize the database.

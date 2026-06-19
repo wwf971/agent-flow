@@ -42,6 +42,7 @@ The database is the source of truth. WebSocket and PostgreSQL notify are refresh
 | `doc/api.md` | HTTP routes, request shape, response shape, and error codes. |
 | `doc/database.md` | Database tables, IDs, indexes, and notifications. |
 | `doc/conversation-iter-task.md` | Task-driven iteration with leases and workers. |
+| `doc/subagent.md` | Task-driven subagent lifecycle, parent-child state, and frontend refresh design. |
 
 ## Conversation And Orchestrator
 
@@ -102,3 +103,4 @@ Start with this document, then read:
 4. `doc/api.md`
 5. `doc/database.md`
 6. `doc/conversation-iter-task.md`
+7. `doc/subagent.md`

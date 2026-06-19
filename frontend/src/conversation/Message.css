@@ -106,3 +106,93 @@
 .conversation-message-pending-detail {
   white-space: pre-wrap;
 }
+
+.conversation-message-subagent-title {
+  color: #526177;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.conversation-message-subagent-summary {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 18px;
+  margin-top: 2px;
+}
+
+.conversation-message-subagent-summary-text {
+  color: #536176;
+  font-size: 12px;
+}
+
+.conversation-message-subagent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 5px;
+}
+
+.conversation-message-subagent-item {
+  border: 1px solid #e0e6f0;
+  border-radius: 3px;
+  background: #fffef8;
+  padding: 4px 5px;
+}
+
+.conversation-message-subagent-item-main {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.conversation-message-subagent-link {
+  border: 0;
+  background: transparent;
+  color: #254f86;
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+  font-size: 12px;
+}
+
+.conversation-message-subagent-link:hover {
+  text-decoration: underline;
+}
+
+.conversation-message-subagent-status {
+  border: 1px solid #d8e1ef;
+  border-radius: 3px;
+  background: #f8fbff;
+  color: #69778b;
+  padding: 1px 4px;
+  font-size: 11px;
+}
+
+.conversation-message-subagent-status-failed {
+  border-color: #e4b9b9;
+  background: #fff6f6;
+  color: #9a3a3a;
+}
+
+.conversation-message-subagent-status-completed {
+  border-color: #bddcbe;
+  background: #f5fff5;
+  color: #357238;
+}
+
+.conversation-message-subagent-status-running,
+.conversation-message-subagent-status-pending,
+.conversation-message-subagent-status-retryWait,
+.conversation-message-subagent-status-loading {
+  border-color: #d8d8ea;
+  background: #f7f7fb;
+  color: #626f85;
+}
+
+.conversation-message-subagent-detail {
+  margin-top: 2px;
+  color: #8a95a5;
+  font-size: 11px;
+  line-height: 1.25;
+}

@@ -181,6 +181,8 @@ def iter_tool_loop(state):
         return
       continue
     yield from iter_after_tool_call(state, reply_agent, tool_call, model_request_config)
+    if is_backend_tool_boundary(state, tool_call["tool_name"]):
+      return
     if is_tool_loop_done(state, tool_call):
       return
 
@@ -199,6 +201,8 @@ def iter_after_tool_call(state, reply_agent, tool_call, model_request_config):
   tool_name = tool_call["tool_name"]
   args = tool_call["args"]
   yield build_tool_call_event(state, reply_agent, tool_call, tool_name)
+  if is_backend_tool_boundary(state, tool_name):
+    return
   try:
     if is_backend_tool(state, tool_name):
       result = yield from state["executeBackendTool"](tool_name, args)
@@ -252,6 +256,12 @@ def is_backend_tool(state, tool_name):
   if not callable(state["executeBackendTool"]):
     return False
   return tool_name in [tool.get("name") for tool in state["backendToolList"] if isinstance(tool, dict)]
+
+
+def is_backend_tool_boundary(state, tool_name):
+  if not is_backend_tool(state, tool_name):
+    return False
+  return tool_name == "tool_subagent"
 
 
 def is_tool_loop_done(state, tool_call):

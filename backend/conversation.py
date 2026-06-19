@@ -341,6 +341,14 @@ def reorder_present_conversation_in_db(
     conversation_id_after: str,
     timezone: int,
 ):
+    if _has_conversation_parent_id_column(db):
+        with closing(dict_cursor(db)) as cursor:
+            cursor.execute("select parentId from conversation where id = %s", (conversation_id,))
+            row = cursor.fetchone()
+            if not row:
+                raise RuntimeError("conversation not found")
+            if row.get("parentid") is not None:
+                raise RuntimeError("child conversation cannot be reordered")
     row_list = _get_present_conversation_rank_rows(db)
     conversation_id_text = str(conversation_id)
     row_by_id = _get_ranked_conversation_by_id(row_list)
@@ -555,10 +563,12 @@ def register_conversation_routes(app, make_json_response):
 
         def action(db):
             with closing(dict_cursor(db)) as cursor:
-                cursor.execute("select metadata from conversation where id = %s for update", (int(conversation_id),))
+                cursor.execute("select metadata, parentId from conversation where id = %s for update", (int(conversation_id),))
                 row = cursor.fetchone()
                 if not row:
                     raise RuntimeError("conversation not found")
+                if row.get("parentid") is not None:
+                    raise RuntimeError("child conversation cannot be renamed")
                 metadata_next = normalize_metadata(row["metadata"])
                 metadata_next["title"] = title_text
                 cursor.execute(
@@ -594,15 +604,30 @@ def register_conversation_routes(app, make_json_response):
                 raise RuntimeError("conversation.isInTrashbin column is missing. Run script/migrate_add_conversation_trashbin.py")
             with closing(db.cursor()) as cursor:
                 if _has_conversation_parent_id_column(db):
+                    cursor.execute("select parentId from conversation where id = %s for update", (int(conversation_id),))
+                    row = cursor.fetchone()
+                    if not row:
+                        raise RuntimeError("conversation not found")
+                    if row.get("parentid") is not None:
+                        raise RuntimeError("child conversation cannot be moved to trashbin directly")
                     cursor.execute(
                         """
+                        with recursive descendant(id) as (
+                            select id
+                            from conversation
+                            where id = %s
+                            union all
+                            select child.id
+                            from conversation child
+                            join descendant on child.parentId = descendant.id
+                        )
                         update conversation
                         set isInTrashbin = %s,
                             updateAt = now(),
                             updateAtTimezone = %s
-                        where id = %s or parentId = %s
+                        where id in (select id from descendant)
                         """,
-                        (is_in_trashbin, timezone, int(conversation_id), int(conversation_id)),
+                        (int(conversation_id), is_in_trashbin, timezone),
                     )
                 else:
                     cursor.execute(
@@ -696,10 +721,12 @@ def register_conversation_routes(app, make_json_response):
 
         def action(db):
             with closing(dict_cursor(db)) as cursor:
-                cursor.execute("select id from conversation where id = %s for update", (int(conversation_id),))
+                cursor.execute("select id, parentId from conversation where id = %s for update", (int(conversation_id),))
                 row = cursor.fetchone()
                 if not row:
                     raise RuntimeError("conversation not found")
+                if row.get("parentid") is not None:
+                    raise RuntimeError("child conversation cannot be deleted directly")
                 cursor.execute("delete from event where conversationId = %s", (int(conversation_id),))
                 event_delete_count = cursor.rowcount
                 cursor.execute("delete from conversation where id = %s", (int(conversation_id),))

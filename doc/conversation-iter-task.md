@@ -80,14 +80,18 @@ create index conversation_lease_expire_idx
 
 Negative values mean the scheduler should inspect the row. Positive values mean no immediate automated iteration is needed.
 
+Current worker execution primarily uses `USER_MESSAGE_READY` for user-message iteration. Subagent support should add explicit scheduler states for launch initialization, child template startup, child waiting, and parent continuation.
+
 | Code | Name | Meaning |
 | --- | --- | --- |
-| `-300` | `SUBAGENT_RUNNING` | Parent conversation waits for child conversation results. |
+| `-400` | `TEMPLATE_START_READY` | Template startup should run as a task. Subagent child startup uses this. |
+| `-300` | `SUBAGENT_LAUNCH_READY` | Parent has a `tool_subagent` request event and child conversations should be initialized. |
 | `-200` | `TOOL_RESULT_READY` | Tool or subagent result is ready and agent should continue. |
 | `-100` | `USER_MESSAGE_READY` | User message is committed and agent should run. |
 | `100` | `WAIT_USER` | Conversation waits for user input. |
 | `200` | `COMPLETED` | Conversation ended normally. |
 | `300` | `ARCHIVED` | Conversation is archived. |
+| `400` | `WAIT_SUBAGENT` | Parent conversation waits for child conversations. No immediate parent iteration is needed. |
 | `1000` | `FAILED` | Conversation ended abnormally. Scheduler must stop. |
 
 ### Exec Status Code
@@ -296,7 +300,7 @@ def run_worker_task(task):
 
 `execStatusCodeNext` is optional. When it is null, commit logic derives it from `stateCodeNext`.
 
-Child conversations have their own explicit work ownership. Child work is not hidden inside a parent process.
+Design target: child conversations should have their own explicit work ownership. In the current implementation, the parent backend tool still runs child subagents inside the parent iteration.
 
 Long iterations refresh the lease before it expires. Lease refresh runs in a short transaction:
 
@@ -416,19 +420,29 @@ execStatusCode = PENDING
 notify conversation_task_ready
 ```
 
-Subagents running:
+Subagent launch requested:
 
 ```text
-USER_MESSAGE_READY -> SUBAGENT_RUNNING
+USER_MESSAGE_READY -> SUBAGENT_LAUNCH_READY
 version += 1
 execStatusCode = PENDING
+notify conversation_task_ready
+```
+
+Subagent children initialized:
+
+```text
+SUBAGENT_LAUNCH_READY -> WAIT_SUBAGENT
+version += 1
+execStatusCode = IDLE
+child conversations use TEMPLATE_START_READY / PENDING
 notify conversation_task_ready
 ```
 
 Subagent results ready:
 
 ```text
-SUBAGENT_RUNNING -> TOOL_RESULT_READY
+WAIT_SUBAGENT -> TOOL_RESULT_READY
 version += 1
 execStatusCode = PENDING
 notify conversation_task_ready

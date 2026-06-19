@@ -1,6 +1,8 @@
 begin;
 
 drop table if exists event cascade;
+drop table if exists subagent_run_child cascade;
+drop table if exists subagent_run cascade;
 drop table if exists conversation_iter_worker cascade;
 drop table if exists conversation cascade;
 drop function if exists notify_conversation_update() cascade;
@@ -79,6 +81,44 @@ create table conversation_iter_worker (
 create index conversation_iter_worker_idle_idx
   on conversation_iter_worker(heartbeatAt, workerId)
   where conversationId is null;
+
+create table subagent_run (
+  runId text primary key,
+  parentConversationId bigint not null references conversation(id) on delete cascade,
+  requestEventId bigint not null references event(id) on delete cascade,
+  startEventId bigint references event(id) on delete set null,
+  resultEventId bigint references event(id) on delete set null,
+  statusText text not null,
+  childCount integer not null default 0,
+  childTerminalCount integer not null default 0,
+  childSuccessCount integer not null default 0,
+  childFailureCount integer not null default 0,
+  requestJson jsonb,
+  createAt timestamptz default now(),
+  updateAt timestamptz default now()
+);
+
+create table subagent_run_child (
+  runId text not null references subagent_run(runId) on delete cascade,
+  childConversationId bigint not null references conversation(id) on delete cascade,
+  parentConversationId bigint not null references conversation(id) on delete cascade,
+  childIndex integer not null,
+  nameText text not null,
+  statusText text not null,
+  turnCount integer not null default 0,
+  latestToolCallJson jsonb,
+  returnJson jsonb,
+  failureText text,
+  createAt timestamptz default now(),
+  updateAt timestamptz default now(),
+  primary key (runId, childConversationId)
+);
+
+create index subagent_run_parent_idx
+  on subagent_run(parentConversationId, updateAt desc, runId);
+
+create index subagent_run_child_run_idx
+  on subagent_run_child(runId, childIndex, childConversationId);
 
 create index event_conversation_create_at_idx
   on event(conversationId, createAt, id);

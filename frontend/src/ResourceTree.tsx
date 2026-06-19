@@ -27,11 +27,17 @@ const ResourceTree = observer(() => {
   const isConversationBranchLocked = appStore.isConversationReorderSaving
   const isContextDeleteVisible = Boolean(
     conversationContext
+    && !conversationContext.parentId
     && conversationContext.isInTrashbin !== true,
   )
   const isContextDeletePermanentVisible = Boolean(
     conversationContext
+    && !conversationContext.parentId
     && conversationContext.isInTrashbin === true,
+  )
+  const isContextRenameVisible = Boolean(
+    conversationContext
+    && !conversationContext.parentId
   )
 
   useLayoutEffect(() => {
@@ -215,21 +221,24 @@ const ResourceTree = observer(() => {
       templateKey: template.key,
     }
   })
-  appStore.conversationList.forEach((conversation) => {
+  appStore.conversationListAll.forEach((conversation) => {
     const metadata = conversation.metadata || {}
     const titleText = String(metadata.title || metadata.templateName || conversation.conversationId)
     const isArchived = String(metadata.statusText || '') === 'archived'
     const isInTrashbin = conversation.isInTrashbin === true
-    itemDataById[`conversation:${conversation.conversationId}`] = {
-      id: `conversation:${conversation.conversationId}`,
+    const childConversationIdList = appStore.getChildConversationIdList(conversation.conversationId)
+    const itemId = `conversation:${conversation.conversationId}`
+    const isRootConversation = !conversation.parentId
+    itemDataById[itemId] = {
+      id: itemId,
       text: isInTrashbin ? `${titleText} [trashbin]` : (isArchived ? `${titleText} [history]` : titleText),
-      isLeaf: true,
-      isExpanded: false,
-      childrenIds: [],
+      isLeaf: childConversationIdList.length < 1,
+      isExpanded: itemExpandedById[itemId] === true,
+      childrenIds: childConversationIdList.map((conversationId) => `conversation:${conversationId}`),
       childrenLoadState: 'loaded',
       conversationId: conversation.conversationId,
       isConversationItem: true,
-      isConversationPresentItem: !isInTrashbin,
+      isConversationPresentItem: !isInTrashbin && isRootConversation,
     }
   })
 
@@ -284,6 +293,9 @@ const ResourceTree = observer(() => {
               ...itemExpandedPrevious,
               [itemId]: isExpandedNext,
             }))
+            if (isExpandedNext && eventData?.itemData?.conversationId) {
+              await appStore.requestChildConversationList(String(eventData.itemData.conversationId), true)
+            }
             return { code: 0 }
           }
           if (eventType === 'itemClick') {
@@ -388,17 +400,19 @@ const ResourceTree = observer(() => {
               event.stopPropagation()
             }}
           >
-            <button
-              type="button"
-              className="resource-context-menu-item"
-              onClick={() => {
-                const conversationId = contextMenuState.conversationId
-                setContextMenuState(null)
-                appStore.startRenameConversation(conversationId, 'tree')
-              }}
-            >
-              Rename
-            </button>
+            {isContextRenameVisible ? (
+              <button
+                type="button"
+                className="resource-context-menu-item"
+                onClick={() => {
+                  const conversationId = contextMenuState.conversationId
+                  setContextMenuState(null)
+                  appStore.startRenameConversation(conversationId, 'tree')
+                }}
+              >
+                Rename
+              </button>
+            ) : null}
             {isContextDeleteVisible ? (
               <button
                 type="button"
