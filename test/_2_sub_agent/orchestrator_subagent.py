@@ -9,11 +9,15 @@ import time
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
+TEST_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
   sys.path.insert(0, str(ROOT_DIR))
+if str(TEST_DIR) not in sys.path:
+  sys.path.insert(0, str(TEST_DIR))
 
 from api_llm import ask_agent
 from backend.config import get_model_service_config
+from test_utils import prompt_text_tool_call_pure_json, tool_call_agent_reply_parse
 
 MAX_TURNS_DEFAULT = 6
 
@@ -128,24 +132,8 @@ def execute_tool(tool_name, args):
 
 
 def parse_tool_call(reply_text):
-  try:
-    data = json.loads(reply_text)
-  except json.JSONDecodeError as error:
-    return None, f"JSON parse failed: {error}"
-  if not isinstance(data, dict):
-    return None, "Tool call must be a JSON object."
-  if data.get("action") != "tool_call":
-    return None, "The action field must be tool_call."
-  tool_name = _to_text(data.get("tool_name"))
-  if tool_name not in [tool["name"] for tool in TOOL_LIST]:
-    return None, f"Unknown tool_name: {tool_name}"
-  args = data.get("args")
-  if not isinstance(args, dict):
-    return None, "The args field must be an object."
-  return {
-    "tool_name": tool_name,
-    "args": args,
-  }, ""
+  tool_name_list = [tool["name"] for tool in TOOL_LIST]
+  return tool_call_agent_reply_parse(reply_text, tool_name_list)
 
 
 def get_tools_description():
@@ -168,6 +156,8 @@ When you want to call a tool, reply only with JSON:
   "tool_name": "tool_name_here",
   "args": {{}}
 }}
+
+{prompt_text_tool_call_pure_json()}
 
 You must end by calling tool_return_to_parent. Put your final answer in args.returnValue and a short text summary in args.summary.
 Do not launch subagents.

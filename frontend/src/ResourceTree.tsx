@@ -6,6 +6,11 @@ import './ResourceTree.css'
 
 type ContextMenuState = {
   conversationId: string
+  itemId: string
+  anchorOffset: {
+    x: number
+    y: number
+  }
   position: {
     x: number
     y: number
@@ -23,6 +28,10 @@ const ResourceTree = observer(() => {
   const [contextMenuState, setContextMenuState] = useState<ContextMenuState>(null)
   const [conversationOverlayStyle, setConversationOverlayStyle] = useState<CSSProperties | null>(null)
   const conversationContext = contextMenuState ? appStore.conversationById[contextMenuState.conversationId] : null
+  const contextMenuConversationId = contextMenuState?.conversationId || ''
+  const contextMenuItemId = contextMenuState?.itemId || ''
+  const contextMenuAnchorOffsetX = contextMenuState?.anchorOffset.x || 0
+  const contextMenuAnchorOffsetY = contextMenuState?.anchorOffset.y || 0
   const conversationListPresent = appStore.conversationListPresent
   const isConversationBranchLocked = appStore.isConversationReorderSaving
   const isContextDeleteVisible = Boolean(
@@ -39,6 +48,46 @@ const ResourceTree = observer(() => {
     conversationContext
     && !conversationContext.parentId
   )
+
+  useLayoutEffect(() => {
+    if (!contextMenuConversationId || !contextMenuItemId) return undefined
+
+    let frameId = 0
+    const updateContextMenuPosition = () => {
+      frameId = 0
+      const rowElement = getTreeRowElementByItemId(contextMenuItemId)
+      if (!rowElement) {
+        setContextMenuState(null)
+        return
+      }
+      const rowRect = rowElement.getBoundingClientRect()
+      setContextMenuState((statePrevious) => {
+        if (!statePrevious) return statePrevious
+        return {
+          ...statePrevious,
+          position: {
+            x: rowRect.left + contextMenuAnchorOffsetX,
+            y: rowRect.top + contextMenuAnchorOffsetY,
+          },
+        }
+      })
+    }
+
+    const requestUpdate = () => {
+      if (frameId) return
+      frameId = requestAnimationFrame(updateContextMenuPosition)
+    }
+
+    requestUpdate()
+    document.addEventListener('scroll', requestUpdate, true)
+    window.addEventListener('resize', requestUpdate)
+
+    return () => {
+      if (frameId) window.cancelAnimationFrame(frameId)
+      document.removeEventListener('scroll', requestUpdate, true)
+      window.removeEventListener('resize', requestUpdate)
+    }
+  }, [contextMenuAnchorOffsetX, contextMenuAnchorOffsetY, contextMenuConversationId, contextMenuItemId])
 
   useLayoutEffect(() => {
     if (!isConversationBranchLocked || itemExpandedById.conversations !== true) {
@@ -88,26 +137,52 @@ const ResourceTree = observer(() => {
     }
   }, [conversationListPresent.length, isConversationBranchLocked, itemExpandedById.conversations])
 
-  const openConversationContextMenu = (conversationId: string, event: MouseEvent) => {
+  const getTreeRowElementByItemId = (itemId: string) => {
+    const shellElement = treeShellRef.current
+    if (!shellElement) return null
+    const rowElementList = Array.from(shellElement.querySelectorAll('[data-tree-item-id]')) as HTMLElement[]
+    return rowElementList.find((element) => element.getAttribute('data-tree-item-id') === itemId) || null
+  }
+
+  const getTreeRowElementFromEvent = (event: MouseEvent) => {
+    const targetElement = event.target instanceof Element ? event.target : null
+    return targetElement?.closest?.('[data-tree-item-id]') as HTMLElement | null
+  }
+
+  const openConversationContextMenu = (conversationId: string, event: MouseEvent, itemIdRaw = '') => {
     const conversationIdNormalized = appStore.normalizeConversationId(conversationId)
     if (!conversationIdNormalized) {
       setContextMenuState(null)
       return
     }
+    const itemId = itemIdRaw || getTreeRowElementFromEvent(event)?.getAttribute('data-tree-item-id') || `conversation:${conversationIdNormalized}`
+    const rowElement = getTreeRowElementByItemId(itemId) || getTreeRowElementFromEvent(event)
+    const rowRect = rowElement?.getBoundingClientRect()
+    const anchorOffset = rowRect
+      ? {
+          x: event.clientX - rowRect.left,
+          y: event.clientY - rowRect.top,
+        }
+      : {
+          x: 0,
+          y: 0,
+        }
     void appStore.selectConversation(conversationIdNormalized)
     setContextMenuState(null)
     requestAnimationFrame(() => {
       setContextMenuState({
         conversationId: conversationIdNormalized,
+        itemId,
+        anchorOffset,
         position: {
-          x: event.clientX,
-          y: event.clientY,
+          x: rowRect ? rowRect.left + anchorOffset.x : event.clientX,
+          y: rowRect ? rowRect.top + anchorOffset.y : event.clientY,
         },
       })
     })
   }
 
-  const getConversationIdUnderContextMenu = (event: React.MouseEvent<HTMLDivElement>) => {
+  const getConversationContextUnderMenu = (event: React.MouseEvent<HTMLDivElement>) => {
     const overlayElementList = Array.from(document.querySelectorAll('.resource-context-menu-backdrop, .resource-context-menu')) as HTMLElement[]
     const previousPointerEventList = overlayElementList.map((element) => ({
       element,
@@ -123,7 +198,10 @@ const ResourceTree = observer(() => {
     const rowElement = targetElement?.closest?.('[data-tree-item-id]')
     const itemId = rowElement?.getAttribute('data-tree-item-id') || ''
     const itemData = itemDataById[itemId]
-    return appStore.normalizeConversationId(itemData?.conversationId)
+    return {
+      conversationId: appStore.normalizeConversationId(itemData?.conversationId),
+      itemId,
+    }
   }
 
   const getConversationIdFromTreeItemId = (itemId: unknown) => {
@@ -347,7 +425,7 @@ const ResourceTree = observer(() => {
               setContextMenuState(null)
               return { code: 0 }
             }
-            openConversationContextMenu(conversationId, event)
+            openConversationContextMenu(conversationId, event, String(eventData?.itemId || ''))
           }
           if (eventType === 'moveItem') {
             const itemId = eventData?.itemId
@@ -381,9 +459,9 @@ const ResourceTree = observer(() => {
             onContextMenu={(event) => {
               event.preventDefault()
               event.stopPropagation()
-              const conversationId = getConversationIdUnderContextMenu(event)
-              if (conversationId) {
-                openConversationContextMenu(conversationId, event.nativeEvent)
+              const contextMenuNext = getConversationContextUnderMenu(event)
+              if (contextMenuNext.conversationId) {
+                openConversationContextMenu(contextMenuNext.conversationId, event.nativeEvent, contextMenuNext.itemId)
                 return
               }
               setContextMenuState(null)

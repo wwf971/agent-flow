@@ -240,6 +240,42 @@ def mark_conversation_user_message_ready(db, conversation_id: int, timezone: int
     return metadata_next
 
 
+def mark_conversation_template_start_ready(db, conversation_id: int, timezone: int):
+    with closing(dict_cursor(db)) as cursor:
+        cursor.execute("select metadata from conversation where id = %s for update", (conversation_id,))
+        row = cursor.fetchone()
+        if not row:
+            raise RuntimeError("conversation not found")
+        metadata_next = normalize_metadata(row["metadata"])
+        metadata_next["isUserTurn"] = False
+        cursor.execute(
+            """
+            update conversation
+            set metadata = %s::jsonb,
+                stateCode = %s,
+                execStatusCode = %s,
+                version = version + 1,
+                leaseId = null,
+                leaseWorkerId = null,
+                leaseExpireAt = null,
+                leaseRetryCount = 0,
+                leaseRetryAfterAt = null,
+                updateAt = now(),
+                updateAtTimezone = %s
+            where id = %s
+            """,
+            (
+                json.dumps(metadata_next),
+                STATE_TEMPLATE_START_READY,
+                EXEC_STATUS_PENDING,
+                timezone,
+                conversation_id,
+            ),
+        )
+        cursor.execute("select pg_notify(%s, '')", (CHANNEL_TASK_READY,))
+    return metadata_next
+
+
 def _build_worker_id(worker_index: int):
     return f"{socket.gethostname()}-{os.getpid()}-{worker_index}-{uuid.uuid4().hex[:8]}"
 
@@ -724,7 +760,7 @@ def _load_iteration_data(task: dict[str, Any]):
 
 
 def _run_iteration(data: dict[str, Any]):
-    from iteration_executor import _get_turn_finish_metadata, run_orchestrator
+    from iteration_executor import _get_template_start_finish_metadata, _get_turn_finish_metadata, run_orchestrator
 
     state_code = int(data["stateCode"])
     if state_code == STATE_SUBAGENT_LAUNCH_READY:
@@ -750,13 +786,27 @@ def _run_iteration(data: dict[str, Any]):
                 }
             )
         )
-        child_finish_result = build_subagent_child_finish_result(data, event_list_new)
+        if data["metadata"].get("subAgentRunId"):
+            child_finish_result = build_subagent_child_finish_result(data, event_list_new)
+            return {
+                "eventListNew": event_list_new,
+                "metadataUpdate": child_finish_result["metadataUpdate"],
+                "stateCodeNext": child_finish_result["stateCodeNext"],
+                "execStatusCodeNext": child_finish_result["execStatusCodeNext"],
+                "subAgentChildFinish": child_finish_result,
+            }
+        metadata_update = _get_template_start_finish_metadata(data["templateKey"])
+        state_next = STATE_COMPLETED if metadata_update.get("statusText") == "completed" else STATE_WAIT_USER
+        subagent_request = prepare_subagent_request_result(event_list_new)
+        if subagent_request:
+            metadata_update = {"isUserTurn": False}
+            state_next = STATE_SUBAGENT_LAUNCH_READY
         return {
             "eventListNew": event_list_new,
-            "metadataUpdate": child_finish_result["metadataUpdate"],
-            "stateCodeNext": child_finish_result["stateCodeNext"],
-            "execStatusCodeNext": child_finish_result["execStatusCodeNext"],
-            "subAgentChildFinish": child_finish_result,
+            "metadataUpdate": metadata_update,
+            "stateCodeNext": state_next,
+            "execStatusCodeNext": None,
+            "subAgentRequest": subagent_request,
         }
     if state_code == STATE_TOOL_RESULT_READY:
         event_list_new = list(

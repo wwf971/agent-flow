@@ -9,8 +9,12 @@ from pathlib import Path
 SITE_EXAMPLE = "https://transit.yahoo.co.jp/diainfo/area/4"
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
+TEST_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
   sys.path.insert(0, str(ROOT_DIR))
+if str(TEST_DIR) not in sys.path:
+  sys.path.insert(0, str(TEST_DIR))
+from test_utils import prompt_text_tool_call_pure_json, tool_call_agent_reply_parse
 from tool_web_fetch import tool_web_fetch
 
 REPLY_TOOL_RETURN_VALUE_EXAMPLE = json.dumps({
@@ -361,30 +365,16 @@ def execute_tool_call(tool_name, args):
 
 
 def parse_tool_call(reply_text, is_allow_repeated_tool=False, is_allow_termination=False, tool_list_extra=None, tool_status=None):
-  try:
-    data = json.loads(reply_text)
-  except json.JSONDecodeError as e:
-    return None, f"JSON parse failed: {e}"
-
-  if not isinstance(data, dict):
-    return None, "Tool call must be a JSON object."
-  if data.get("action") != "tool_call":
-    return None, "The action field must be tool_call."
-
-  tool_name = data.get("tool_name")
-  tool_names = [tool["name"] for tool in get_tool_list(is_include_termination=is_allow_termination, tool_list_extra=tool_list_extra)]
-  if tool_name not in tool_names:
-    return None, f"Unknown tool_name: {tool_name}"
-  if not is_allow_repeated_tool and tool_name in get_tools_called(tool_status):
-    return None, f"The tool {tool_name} was already completed. Choose a remaining tool."
-
-  args = data.get("args")
-  if not isinstance(args, dict):
-    return None, "The args field must be an object."
-  return {
-    "tool_name": tool_name,
-    "args": args,
-  }, ""
+  tool_name_list = [
+    tool["name"]
+    for tool in get_tool_list(is_include_termination=is_allow_termination, tool_list_extra=tool_list_extra)
+  ]
+  return tool_call_agent_reply_parse(
+    reply_text,
+    tool_name_list,
+    is_allow_repeated_tool=is_allow_repeated_tool,
+    tool_name_called_list=get_tools_called(tool_status),
+  )
 
 
 def build_initial_prompt(is_encourage_invalid_tool=False, tool_list_extra=None):
@@ -409,9 +399,7 @@ Available tools:
 You must visit this site by using tool_web_fetch:
 {SITE_EXAMPLE}
 
-When you want to execute a tool, reply with only standard JSON.
-Do not wrap JSON in markdown.
-Do not include natural language around the JSON.
+{prompt_text_tool_call_pure_json()}
 
 Required tool call format:
 {{
@@ -437,6 +425,8 @@ You are an assistant inside an interactive tool-calling experiment.
 
 You can reply in natural language when no tool is needed.
 When a tool is useful, reply with only standard JSON in the required tool call format.
+
+{prompt_text_tool_call_pure_json()}
 
 Available tools:
 {get_tools_description(is_include_termination=True, tool_list_extra=tool_list_extra)}

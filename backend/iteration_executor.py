@@ -165,6 +165,8 @@ def build_template_context(state: dict[str, Any], message_text: str, event_list:
         "timezone": state["timezone"],
         "initialPrompt": state["initialPrompt"],
         "maxTurns": state["maxTurns"],
+        "iterType": state.get("iterType") or state["metadata"].get("iterType") or "userMessage",
+        "templateKey": state["templateKey"],
         "backendToolList": get_backend_tool_list(),
         "executeBackendTool": lambda tool_name, args: iter_backend_tool(state, tool_name, args),
     }
@@ -699,7 +701,14 @@ def register_orchestrator_routes(app, make_json_response):
         }
 
         def action(db):
-            return create_conversation_in_db(db, metadata, timezone, parent_id)
+            conversation_created = create_conversation_in_db(db, metadata, timezone, parent_id)
+            if template.get("isStartTask") is True:
+                from iteration_scheduler import mark_conversation_template_start_ready
+
+                conversation_id = int(conversation_created["conversationId"])
+                mark_conversation_template_start_ready(db, conversation_id, timezone)
+                return get_conversation_by_id(db, conversation_id)
+            return conversation_created
 
         conversation_id_for_error = 0
         conversation = None

@@ -22,6 +22,7 @@ Current templates:
 | `web-fetch-local` | yes | `test/_0_web_fetch_local/orchestrator.py` |
 | `mcp-tool-all` | yes | `test/_1_mcp/orchestrator.py` |
 | `mcp-interactive` | yes | `test/_1_mcp/orchestrator.py` |
+| `subagent-test` | yes | `test/_2_sub_agent/orchestrator_parent.py` |
 | `subagent-basic` | no | `test/_2_sub_agent/orchestrator_subagent.py` |
 
 The template key is durable conversation metadata. The orchestrator module should not create another source of truth for event order, user-turn state, or completion state.
@@ -81,6 +82,8 @@ The route does not return an agent reply. The frontend refreshes events from the
 ## Template Startup Process
 
 `POST /api/conversation/create/from-template` creates the conversation and may run a `templateStart` iteration.
+
+Templates with `isStartTask = true` are scheduled as task-driven startup work. The conversation is created with `isUserTurn = false`, `stateCode = TEMPLATE_START_READY`, and `execStatusCode = PENDING`. A worker then runs `templateStart` and commits the generated events.
 
 Templates with `isStartBackground = true` still use the older daemon-thread startup path:
 
@@ -151,6 +154,8 @@ When the parent orchestrator calls it, the task-driven flow is:
 Each child uses `test/_2_sub_agent/orchestrator_subagent.py`. A child must end by calling `tool_return_to_parent`, which yields `orchestratorMessage / subAgentReturn` in the child conversation.
 
 The detailed state and database design is in `doc/subagent.md`.
+
+Parent and child prompts that are sent by orchestration should be persisted as `orchestratorMessage / textSimple`. They should not be stored as `userMessage`, because no user entered them.
 
 ## Event Ownership
 

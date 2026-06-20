@@ -854,51 +854,7 @@ class AppStore {
   }
 
   async createConversationFromTemplateDefault(templateKey: string) {
-    if (templateKey === 'subagent-test') {
-      await this.createSubagentTestConversation()
-      return
-    }
     await this.createConversationFromTemplate(templateKey)
-  }
-
-  async createSubagentTestConversation() {
-    runInAction(() => {
-      this.errorText = ''
-      this.noticeText = 'Creating subagent test'
-    })
-    const conversation = await this.createConversationFromTemplate('subagent-test')
-    const conversationId = this.normalizeConversationId(conversation?.conversationId)
-    if (!conversationId) return
-    const messageText = 'Ask one child subagent to return a short hello text to the parent.'
-    runInAction(() => {
-      this.setOperationByConversationId(conversationId, OPERATION_KEY.messageSend, createOperationState('running', 'Starting subagent test'))
-    })
-    try {
-      const data = await requestAuthenticatedJson<{ conversationId: string, eventUser?: EventItem }>('/api/orchestrator/turn/create', {
-        method: 'POST',
-        body: JSON.stringify({
-          conversationId,
-          messageText,
-          timezone: new Date().getTimezoneOffset() * -1,
-        }),
-      })
-      runInAction(() => {
-        if (data.eventUser) {
-          this.appendEventIfMissing(data.eventUser)
-        }
-        this.noticeText = ''
-      })
-      await Promise.all([
-        this.requestConversationListAll(true),
-        this.requestEventList(conversationId, true),
-      ])
-    } catch (error: unknown) {
-      runInAction(() => {
-        this.errorText = String(error)
-        this.noticeText = ''
-        this.setOperationByConversationId(conversationId, OPERATION_KEY.messageSend, createOperationState('error', String(error)))
-      })
-    }
   }
 
   setMessageDraftText(value: string) {

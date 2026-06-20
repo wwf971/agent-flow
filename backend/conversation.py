@@ -602,7 +602,7 @@ def register_conversation_routes(app, make_json_response):
         def action(db):
             if not _has_conversation_trashbin_column(db):
                 raise RuntimeError("conversation.isInTrashbin column is missing. Run script/migrate_add_conversation_trashbin.py")
-            with closing(db.cursor()) as cursor:
+            with closing(dict_cursor(db)) as cursor:
                 if _has_conversation_parent_id_column(db):
                     cursor.execute("select parentId from conversation where id = %s for update", (int(conversation_id),))
                     row = cursor.fetchone()

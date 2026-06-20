@@ -70,10 +70,11 @@ TEMPLATE_LIST = [
         "description": "Launches one child subagent that returns a short text answer to the parent.",
         "modulePath": "test/_2_sub_agent/orchestrator_parent.py",
         "isStartBackground": False,
+        "isStartTask": True,
         "isUserMessageAccepted": True,
         "metadataCreate": {
             "statusText": "active",
-            "isUserTurn": True,
+            "isUserTurn": False,
         },
         "metadataStartFinish": {
             "statusText": "active",

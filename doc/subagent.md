@@ -127,6 +127,7 @@ Child metadata should contain:
 
 The parent conversation uses these events:
 
+- `orchestratorMessage / textSimple`: parent startup instruction or retry instruction.
 - `agentMessage / toolCall`: the parent agent requested `tool_subagent`.
 - `orchestratorMessage / subAgentStart`: child conversations were created and scheduled.
 - `orchestratorMessage / subAgentResult`: all child conversations reached terminal state.
@@ -616,6 +617,19 @@ From the child agent perspective:
 4. It cannot launch further subagents unless nested subagents are explicitly added later.
 
 The parent agent should receive failed child results as data it can reason about. A failed child is not hidden from the parent.
+
+## Prompt Visibility
+
+Any instruction text created by an orchestrator and sent to an agent should be visible as `orchestratorMessage / textSimple`.
+
+This includes:
+
+- parent startup instructions that explain `tool_subagent`
+- parent retry instructions
+- child startup instructions that explain child tools and `tool_return_to_parent`
+- child retry instructions after invalid tool-call text
+
+The frontend should show these as Orchestrator messages. They should not be stored as `userMessage`, because no user entered them.
 
 ## Backend API Shape
 

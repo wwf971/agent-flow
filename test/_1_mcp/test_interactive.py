@@ -15,6 +15,7 @@ from test_utils import (
   append_message,
   build_time_stamp,
   format_tool_result_for_print,
+  is_tool_call_agent_reply,
   print_section,
   shorten_text,
   try_write_backend_conversation_log,
@@ -23,11 +24,7 @@ from test_utils import (
 
 
 def is_tool_call_like(reply_text):
-  try:
-    data = json.loads(reply_text)
-  except json.JSONDecodeError:
-    return False
-  return isinstance(data, dict) and data.get("action") == "tool_call"
+  return is_tool_call_agent_reply(reply_text)
 
 
 def build_tool_result_reply(tool_name, result):
