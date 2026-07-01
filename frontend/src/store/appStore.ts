@@ -1,7 +1,37 @@
 import { makeAutoObservable, runInAction } from 'mobx'
+import { createAuthStore } from '@wwf971/react-comp-misc'
 import { ApiRequestError, requestAuthenticatedJson } from '../apiRequest'
-import { isUpdateWebSocketEnabled, resolveWebSocketUrl } from '../publicPath'
+import { isUpdateWebSocketEnabled, resolveApiUrl, resolveWebSocketUrl } from '../publicPath'
 import { sortByGlobalRank } from './lexoRank'
+
+type ApiResponse<T = Record<string, any>> = {
+  code: number
+  data?: T
+  message?: string
+}
+
+async function requestJsonData(url: string, options: RequestInit = {}) {
+  const response = await fetch(resolveApiUrl(url), {
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    ...options,
+  })
+  const body = (await response.json()) as ApiResponse
+  if (response.status < 200 || response.status >= 300 || body.code < 0) {
+    throw new Error(body.message || `request failed: ${response.status}`)
+  }
+  return body.data || {}
+}
+
+export const authStore = createAuthStore({
+  storageKey: 'react-agent-flow-auth-token',
+  autoLoginStorageKey: 'react-agent-flow-auto-login-enabled',
+  requestJsonData,
+  loginSuccessMessage: 'Login completed',
+  logoutSuccessMessage: 'Logged out',
+})
 
 export const PAGE_KEY = {
   template: 'template',
@@ -425,13 +455,13 @@ class AppStore {
     this.startRefreshLoop()
   }
 
-  connectUpdateSocket() {
+  async connectUpdateSocket() {
     if (!isUpdateWebSocketEnabled()) {
       this.socketStatusText = 'disabled'
       return
     }
     if (this.socketUpdate) return
-    const token = localStorage.getItem('react-agent-flow-auth-token') || ''
+    const token = await authStore.getServiceToken()
     const socketUrl = resolveWebSocketUrl(`/api/ws/conversation-updates?authToken=${encodeURIComponent(token)}`)
     const socket = new WebSocket(socketUrl)
     this.socketUpdate = socket

@@ -28,9 +28,11 @@ const SegValuePopup = ({ titleText, value, onClose }: SegValuePopupProps) => {
           {jsonViewData ? (
             <JsonCompMobx
               data={jsonViewData}
-              isEditable={false}
-              isKeyEditable={false}
-              isValueEditable={false}
+              config={{
+                isEditable: false,
+                isKeyEditable: false,
+                isValueEditable: false,
+              }}
             />
           ) : (
             <pre className="conversation-value-popup-text">{String(value ?? '')}</pre>

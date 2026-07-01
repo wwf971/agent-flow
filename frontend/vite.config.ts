@@ -4,20 +4,10 @@ import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 
 const dirCurrent = dirname(fileURLToPath(import.meta.url))
-
-const normalizeBasePath = (rawBasePath: string | undefined): string => {
-  const trimmed = `${rawBasePath ?? ''}`.trim()
-  if (!trimmed || trimmed === '/') {
-    return '/'
-  }
-  const withLeadingSlash = trimmed.startsWith('/') ? trimmed : `/${trimmed}`
-  return withLeadingSlash.endsWith('/') ? withLeadingSlash : `${withLeadingSlash}/`
-}
-
-const appBasePath = normalizeBasePath(process.env.VITE_APP_BASE_PATH)
+const APP_BASE_ASSET_PLACEHOLDER = '/__APP_BASE__/'
 
 export default defineConfig({
-  base: appBasePath,
+  base: APP_BASE_ASSET_PLACEHOLDER,
   plugins: [react()],
   resolve: {
     dedupe: ['react', 'react-dom'],

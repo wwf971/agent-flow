@@ -1,5 +1,12 @@
 .app-root {
   height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-body {
+  flex: 1;
+  min-height: 0;
 }
 
 .app-init-text {

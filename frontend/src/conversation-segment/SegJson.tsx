@@ -27,13 +27,15 @@ const SegJson = ({ data, displayRules = {} }: SegJsonProps) => {
     <div className="conversation-json-segment">
       <JsonCompMobx
         data={jsonViewData}
-        isEditable={false}
-        isKeyEditable={false}
-        isValueEditable={false}
-        getValueComp={({ path, value }: { path: string, value: unknown }) => {
-          const pathText = normalizeJsonPath(path)
-          if (displayRules[pathText] !== 'popup') return null
-          return <AbbreviatedValue pathText={pathText} value={value} />
+        config={{
+          isEditable: false,
+          isKeyEditable: false,
+          isValueEditable: false,
+          getValueComp: ({ path, value }: { path: string, value: unknown }) => {
+            const pathText = normalizeJsonPath(path)
+            if (displayRules[pathText] !== 'popup') return null
+            return <AbbreviatedValue pathText={pathText} value={value} />
+          },
         }}
       />
     </div>

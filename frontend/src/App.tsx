@@ -2,10 +2,10 @@ import { useEffect } from 'react'
 import { observer } from 'mobx-react-lite'
 import { reaction } from 'mobx'
 import { Login, PanelDual } from '@wwf971/react-comp-misc'
+import Header from './Header'
 import ResourceTree from './ResourceTree'
 import ResourcePanel from './ResourcePanel'
-import { appStore } from './store/appStore'
-import { authStore } from './store/authStore'
+import { appStore, authStore } from './store/appStore'
 import './App.css'
 
 const App = observer(() => {
@@ -51,14 +51,17 @@ const App = observer(() => {
 
   return (
     <div className="app-root">
-      <PanelDual orientation="vertical" initialWidth={300}>
-        <div className="app-sidebar">
-          <ResourceTree />
-        </div>
-        <div className="app-main">
-          <ResourcePanel />
-        </div>
-      </PanelDual>
+      <Header />
+      <div className="app-body">
+        <PanelDual orientation="vertical" initialWidth={300}>
+          <div className="app-sidebar">
+            <ResourceTree />
+          </div>
+          <div className="app-main">
+            <ResourcePanel />
+          </div>
+        </PanelDual>
+      </div>
     </div>
   )
 })

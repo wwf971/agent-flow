@@ -1,6 +1,21 @@
+const APP_BASE_ASSET_PLACEHOLDER = '/__APP_BASE__/'
+const APP_BASE_PATH_CANDIDATES = ['/agent-flow']
+
+function getRuntimeBasePath() {
+  if (typeof window === 'undefined') {
+    return ''
+  }
+  const { pathname } = window.location
+  return APP_BASE_PATH_CANDIDATES.find((basePath) => (
+    pathname === basePath || pathname.startsWith(`${basePath}/`)
+  )) || ''
+}
+
 function getBasePath() {
   const basePath = String(import.meta.env.BASE_URL || '/')
-  if (!basePath || basePath === '/') return ''
+  if (!basePath || basePath === '/' || basePath === APP_BASE_ASSET_PLACEHOLDER) {
+    return getRuntimeBasePath()
+  }
   return basePath.endsWith('/') ? basePath.slice(0, -1) : basePath
 }
 

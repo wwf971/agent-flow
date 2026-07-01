@@ -6,3 +6,4 @@ google-genai
 trafilatura
 requests
 beautifulsoup4
+PyJWT[crypto]>=2.8.0

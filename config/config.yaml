@@ -2,6 +2,7 @@ google_api_key: "example_google_api_key"
 google_model: "gemini-2.5-flash"
 url_extract_method: "trafilatura"
 auth:
+  type: internal
   users:
     - username: example_rw
       password: example_password
@@ -9,6 +10,14 @@ auth:
     - username: example_r
       password: example_read_password
       permission: R
+# auth:
+#   type: "@wwf971/auth-jwt"
+#   ip: 127.0.0.1
+#   port: 9531
+#   service_id: react-agent-flow
+#   read_permission_code: 1
+#   write_permission_code: 2
+#   default_permission: RW
 config_databases:
   local:
     ip: 127.0.0.1

@@ -1,4 +1,4 @@
-import { authStore } from './store/authStore'
+import { authStore } from './store/appStore'
 import { resolveApiUrl } from './publicPath'
 
 export type ApiResponse<T = any> = {
@@ -22,7 +22,7 @@ export class ApiRequestError<T = any> extends Error {
 }
 
 export async function requestAuthenticatedJson<T = any>(url: string, options: RequestInit = {}) {
-  const token = authStore.token
+  const token = await authStore.getServiceToken()
   const optionsNext: RequestInit = { ...options }
   if (token && optionsNext.body && typeof optionsNext.body === 'string') {
     try {
@@ -43,7 +43,7 @@ export async function requestAuthenticatedJson<T = any>(url: string, options: Re
     credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
-      ...authStore.getAuthHeaders(),
+      ...authStore.getAuthHeadersForToken(token),
       ...(optionsNext.headers || {}),
     },
     ...optionsNext,
