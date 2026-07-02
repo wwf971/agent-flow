@@ -39,3 +39,22 @@
   padding: 5px 6px;
   font-size: 13px;
 }
+
+.app-message-bar-refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid #d3b0b0;
+  border-radius: 3px;
+  background: #fff;
+  color: #8a2f2f;
+  cursor: pointer;
+  padding: 0;
+}
+
+.app-message-bar-refresh-btn:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
